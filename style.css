@@ -146,6 +146,29 @@ body {
 .form-error { margin: -4px 0 0; font-size: 13px; font-weight: 500; color: var(--critical); }
 .form-error:empty { display: none; }
 
+.form-info { margin: -4px 0 0; font-size: 13px; color: var(--good-ink); }
+.form-info:empty { display: none; }
+.lock__switch { margin: 0; text-align: center; font-size: 13px; color: var(--text-secondary); }
+.lock__switch[hidden] { display: none; }
+.lock .btn[hidden] { display: none; }
+
+.account { margin: 0 0 4px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+
+/* status sinkron di footer */
+.sync { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 4px; color: var(--text-secondary); }
+.sync__dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--text-muted); }
+.sync[data-state="synced"] .sync__dot { background: var(--good); }
+.sync[data-state="syncing"] .sync__dot { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+.sync[data-state="offline"] .sync__dot,
+.sync[data-state="conflict"] .sync__dot { background: var(--warn); }
+.sync[data-state="error"] .sync__dot { background: var(--critical); }
+.sync[data-state="error"] { color: var(--critical); }
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+.dialog__text { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }
+.btn--stack { flex-direction: column; gap: 1px; min-height: 54px; padding: 8px 16px; white-space: normal; }
+.btn--stack small { font-size: 11.5px; font-weight: 500; opacity: 0.8; }
+
 .btn:disabled { opacity: 0.6; cursor: progress; transform: none; }
 
 .sr-only {
@@ -616,6 +639,7 @@ body {
 
 /* ---------- Footer & toast ---------- */
 
+.footer p { margin: 0 0 6px; }
 .footer {
   padding: 8px 4px 0;
   font-size: 12px;

@@ -1,16 +1,19 @@
 /* ============================================================
    Cashflow — Profit Sharing
-   Semua data tersimpan di localStorage (browser lokal), terenkripsi
-   dengan kunci yang diturunkan dari password pengguna.
+   Data dienkripsi di browser (kunci diturunkan dari password), lalu
+   disinkronkan ke Supabase dan di-cache terenkripsi di localStorage.
+   Supabase hanya pernah melihat ciphertext.
    ============================================================ */
 
 (() => {
   "use strict";
 
   const STORE_KEY = "cashflow.v1";        // format lama (tidak terenkripsi) — hanya dibaca untuk migrasi
-  const ENC_KEY = "cashflow.enc.v1";      // data terenkripsi
-  const SESSION_KEY = "cashflow.session"; // kunci sesi; hilang saat tab ditutup
+  const ENC_KEY = "cashflow.enc.v1";      // format lama (terenkripsi, lokal saja) — hanya untuk migrasi
+  const CACHE_KEY = "cashflow.cloud.v1";  // + ":<email>" — cache terenkripsi data cloud + status sinkron
+  const SESSION_KEY = "cashflow.session"; // kunci + token sesi; hilang saat tab ditutup
   const THEME_KEY = "cashflow.theme";     // tema disimpan terpisah supaya layar login ikut tema
+  const CFG = window.CASHFLOW_CONFIG || {};
 
   // ---------- State ----------
 
@@ -95,26 +98,35 @@
     }
   }
 
+  // Simpan = enkripsi -> cache lokal (langsung) -> sinkron ke cloud (sebentar lagi).
+  // render() memanggil save() setiap kali; yang tidak berubah dilewati.
+  let lastSavedJson = null;
   function save() {
     if (!vault.key) return;
-    // Enkripsi dimulai sekarang (snapshot state saat ini); penulisan diantrekan supaya urutannya terjaga.
-    const payload = encryptState(vault, state);
+    const json = JSON.stringify(state);
+    if (json === lastSavedJson) return;
+    lastSavedJson = json;
+    const payload = encryptJson(vault.key, json); // snapshot sekarang
     vault.writing = vault.writing
       .then(() => payload)
-      .then((blob) => localStorage.setItem(ENC_KEY, blob))
-      .catch(() => {
-        // localStorage bisa diblokir (mode privat / file:// di sebagian browser).
-        // Aplikasi tetap jalan untuk sesi ini; data hilang saat tab ditutup.
-        warnOnce();
-      });
+      .then((blob) => {
+        cache.blob = blob;
+        cache.dirty = true;
+        cache.localAt = new Date().toISOString();
+        writeCache();
+        scheduleSync();
+      })
+      .catch(() => warnOnce());
   }
 
   // ---------- Enkripsi ----------
-  // AES-GCM 256-bit; kunci dari password via PBKDF2-SHA256. Salt & IV acak disimpan bersama ciphertext.
-  // Kode aplikasi boleh publik — tanpa password, isi localStorage tidak bisa dibaca.
+  // Dari password + email diturunkan 512 bit (PBKDF2-SHA256):
+  //   - 256 bit pertama -> "password" untuk login Supabase (password asli tidak pernah dikirim)
+  //   - 256 bit kedua   -> kunci AES-GCM untuk data (tidak pernah meninggalkan perangkat)
+  // Jadi Supabase tidak bisa membuka data walau menyimpan hash login & ciphertext.
 
   const KDF_ITER = 600_000;
-  const vault = { key: null, salt: null, iter: KDF_ITER, writing: Promise.resolve() };
+  const vault = { key: null, writing: Promise.resolve() };
 
   function toB64(buf) {
     const bytes = new Uint8Array(buf);
@@ -123,60 +135,295 @@
     return btoa(s);
   }
   const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const toHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  const normEmail = (e) => String(e || "").trim().toLowerCase();
 
-  async function deriveKey(password, salt, iter) {
-    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt, iterations: iter, hash: "SHA-256" },
-      base, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  async function deriveCredentials(email, password) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+    const bits = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: "PBKDF2", salt: new TextEncoder().encode("cashflow-v2:" + normEmail(email)), iterations: KDF_ITER, hash: "SHA-256" },
+      base, 512));
+    const key = await crypto.subtle.importKey("raw", bits.slice(32), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+    return { authSecret: toHex(bits.slice(0, 32)), key };
   }
 
-  async function encryptState({ key, salt, iter }, data) {
+  async function encryptJson(key, json) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(data)));
-    return JSON.stringify({ v: 1, kdf: "PBKDF2-SHA256", iter, salt: toB64(salt), iv: toB64(iv), data: toB64(ct) });
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(json));
+    return JSON.stringify({ v: 2, iv: toB64(iv), data: toB64(ct) });
   }
 
-  async function decryptBlob(key, blob) {
+  async function decryptBlob(key, blobStr) {
+    const blob = typeof blobStr === "string" ? JSON.parse(blobStr) : blobStr;
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(blob.iv) }, key, fromB64(blob.data));
     return JSON.parse(new TextDecoder().decode(pt));
   }
 
-  function readBlob() {
-    try {
-      const raw = localStorage.getItem(ENC_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
+  // Format lama (v1, lokal saja): kunci dari password + salt acak yang disimpan bersama data.
+  async function decryptLegacyLocal(password) {
+    let blob;
+    try { blob = JSON.parse(localStorage.getItem(ENC_KEY) || "null"); } catch { return null; }
+    if (!blob) return null;
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+    const key = await crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: fromB64(blob.salt), iterations: blob.iter || KDF_ITER, hash: "SHA-256" },
+      base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    try { return await decryptBlob(key, blob); } catch { return null; }
   }
 
-  // Coba password ke data tersimpan; null kalau salah.
-  async function tryPassword(password, blob) {
-    const salt = fromB64(blob.salt);
-    const iter = blob.iter || KDF_ITER;
-    const key = await deriveKey(password, salt, iter);
-    try {
-      return { key, salt, iter, data: await decryptBlob(key, blob) };
-    } catch {
-      return null;
-    }
+  const hasLegacyLocal = () => { try { return !!localStorage.getItem(ENC_KEY); } catch { return false; } };
+
+  // ---------- Cache lokal (per email) ----------
+  // { userId, email, blob, version (versi cloud yang jadi dasar), dirty, localAt, syncedAt }
+
+  let cache = {};
+  const cacheKey = (email) => `${CACHE_KEY}:${normEmail(email)}`;
+  function readCache(email) {
+    try { return JSON.parse(localStorage.getItem(cacheKey(email)) || "null") || {}; } catch { return {}; }
+  }
+  function writeCache() {
+    if (!cache.email) return;
+    try { localStorage.setItem(cacheKey(cache.email), JSON.stringify(cache)); } catch { warnOnce(); }
   }
 
-  async function rememberSession(key) {
-    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(await crypto.subtle.exportKey("jwk", key))); } catch { /* sesi tidak diingat */ }
+  // ---------- Supabase (REST) ----------
+
+  const cloudConfigured = () => /^https?:\/\//.test(CFG.supabaseUrl || "") && !!CFG.supabaseAnonKey;
+  let session = null; // { access_token, refresh_token, expires_at, userId, email }
+
+  class ApiError extends Error {
+    constructor(status, body) {
+      super(body.msg || body.error_description || body.message || body.error || `HTTP ${status}`);
+      this.status = status;
+      this.code = body.error_code || body.code || body.error || "";
+    }
+  }
+  const isNetworkError = (e) => !(e instanceof ApiError);
+
+  async function http(method, path, { body, token, headers = {} } = {}) {
+    const res = await fetch(CFG.supabaseUrl.replace(/\/+$/, "") + path, {
+      method,
+      headers: {
+        apikey: CFG.supabaseAnonKey,
+        Authorization: "Bearer " + (token || CFG.supabaseAnonKey),
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...headers,
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
+    if (!res.ok) throw new ApiError(res.status, json || {});
+    return json;
+  }
+
+  function setSession(r, email) {
+    session = {
+      access_token: r.access_token,
+      refresh_token: r.refresh_token,
+      expires_at: Date.now() + (r.expires_in || 3600) * 1000,
+      userId: r.user ? r.user.id : session && session.userId,
+      email: normEmail(email || (r.user && r.user.email) || (session && session.email)),
+    };
+    persistSession();
+  }
+
+  async function persistSession() {
+    try {
+      const jwk = vault.key ? await crypto.subtle.exportKey("jwk", vault.key) : null;
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ session, jwk }));
+    } catch { /* sesi tidak diingat — cukup login lagi */ }
   }
 
   function forgetSession() {
     try { sessionStorage.removeItem(SESSION_KEY); } catch { /* abaikan */ }
   }
 
-  let warned = false;
-  function warnOnce() {
-    if (warned) return;
-    warned = true;
-    setTimeout(() => toast("Penyimpanan browser tidak aktif — data hanya bertahan di sesi ini"), 400);
+  const auth = {
+    signUp: (email, secret) => http("POST", "/auth/v1/signup", { body: { email, password: secret } }),
+    signIn: (email, secret) => http("POST", "/auth/v1/token?grant_type=password", { body: { email, password: secret } }),
+    refresh: (rt) => http("POST", "/auth/v1/token?grant_type=refresh_token", { body: { refresh_token: rt } }),
+    logout: (token) => http("POST", "/auth/v1/logout", { token }),
+  };
+
+  async function freshToken() {
+    if (!session) throw new ApiError(401, { msg: "not signed in" });
+    if (Date.now() > session.expires_at - 60_000) setSession(await auth.refresh(session.refresh_token));
+    return session.access_token;
   }
+
+  // Request dengan token user; kalau 401 coba refresh sekali.
+  async function authed(method, path, opts = {}) {
+    try {
+      return await http(method, path, { ...opts, token: await freshToken() });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 401 || !session) throw e;
+      setSession(await auth.refresh(session.refresh_token));
+      return http(method, path, { ...opts, token: session.access_token });
+    }
+  }
+
+  const remote = {
+    async get() {
+      const rows = await authed("GET", "/rest/v1/vaults?select=data,version,updated_at");
+      return rows && rows[0] ? rows[0] : null;
+    },
+    // Tulis dengan cek versi (optimistic locking). Mengembalikan versi baru, atau null kalau keduluan perangkat lain.
+    async put(data, baseVersion) {
+      const now = new Date().toISOString();
+      if (!baseVersion) {
+        try {
+          const rows = await authed("POST", "/rest/v1/vaults", {
+            body: { data, version: 1, updated_at: now },
+            headers: { Prefer: "return=representation" },
+          });
+          return rows[0].version;
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 409) return null; // sudah ada baris dari perangkat lain
+          throw e;
+        }
+      }
+      const rows = await authed("PATCH",
+        `/rest/v1/vaults?user_id=eq.${encodeURIComponent(session.userId)}&version=eq.${baseVersion}`, {
+          body: { data, version: baseVersion + 1, updated_at: now },
+          headers: { Prefer: "return=representation" },
+        });
+      return rows && rows[0] ? rows[0].version : null;
+    },
+    updatePassword: (secret) => authed("PUT", "/auth/v1/user", { body: { password: secret } }),
+  };
+
+  // ---------- Sinkron ----------
+
+  const sync = { timer: null, running: false, again: false, state: "idle", conflictOpen: false };
+
+  function setSync(st, detail) {
+    sync.state = st;
+    const el = document.getElementById("syncStatus");
+    if (!el) return;
+    el.dataset.state = st;
+    const time = cache.syncedAt ? new Date(cache.syncedAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "";
+    document.getElementById("syncText").textContent =
+      st === "syncing" ? "Menyinkron…"
+      : st === "synced" ? `Tersinkron ke cloud${time ? " · " + time : ""}`
+      : st === "offline" ? "Offline — perubahan disimpan di perangkat ini, dikirim saat online"
+      : st === "conflict" ? "Menunggu pilihan data (konflik)"
+      : st === "error" ? `Gagal sinkron${detail ? " — " + detail : ""}`
+      : "—";
+  }
+
+  function scheduleSync(delay = 800) {
+    clearTimeout(sync.timer);
+    sync.timer = setTimeout(runSync, delay);
+  }
+
+  // Terapkan data dari cloud ke layar tanpa menandainya sebagai perubahan lokal.
+  function applyRemote(data, row) {
+    state = normalize(data);
+    backfillPayoutAmounts();
+    lastSavedJson = JSON.stringify(state);
+    cache.blob = row.data;
+    cache.version = row.version;
+    cache.dirty = false;
+    cache.syncedAt = new Date().toISOString();
+    writeCache();
+    render();
+  }
+
+  async function runSync() {
+    if (!vault.key) return;
+    if (sync.running) { sync.again = true; return; }
+    if (!session) {
+      setSync("offline");
+      if (pendingSignIn) retrySignIn();
+      return;
+    }
+    if (sync.conflictOpen) return;
+    sync.running = true;
+    setSync("syncing");
+    try {
+      await vault.writing;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const row = await remote.get();
+        const base = cache.version || 0;
+
+        if (row && row.version > base) {
+          const data = await decryptBlob(vault.key, row.data).catch(() => null);
+          if (!data) {
+            setSync("error", "password diganti di perangkat lain — keluar lalu masuk lagi dengan password baru");
+            return;
+          }
+          if (cache.dirty) {
+            await resolveConflict(data, row);
+            return;
+          }
+          applyRemote(data, row);
+          break;
+        }
+
+        if (!cache.dirty) { cache.syncedAt = new Date().toISOString(); writeCache(); break; }
+
+        const pushed = cache.blob;
+        const v = await remote.put(pushed, row ? base : 0);
+        if (v === null) continue; // keduluan perangkat lain — ambil ulang lalu tangani
+        cache.version = v;
+        if (cache.blob === pushed) cache.dirty = false; // ada perubahan baru selama upload -> tetap dirty
+        cache.syncedAt = new Date().toISOString();
+        writeCache();
+        if (cache.dirty) sync.again = true;
+        break;
+      }
+      setSync("synced");
+    } catch (e) {
+      if (isNetworkError(e) || !navigator.onLine) setSync("offline");
+      else setSync("error", e.status === 401 ? "sesi berakhir, keluar lalu masuk lagi" : e.message);
+      scheduleSync(15_000);
+    } finally {
+      sync.running = false;
+      if (sync.again) { sync.again = false; scheduleSync(300); }
+    }
+  }
+
+  function describe(data, at) {
+    const n = Array.isArray(data.entries) ? data.entries.length : 0;
+    const when = at ? new Date(at).toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+    return `${n} entri${when ? " · diubah " + when : ""}`;
+  }
+
+  function resolveConflict(remoteData, row) {
+    return new Promise((resolve) => {
+      const d = document.getElementById("conflictDialog");
+      sync.conflictOpen = true;
+      setSync("conflict");
+      document.getElementById("conflictRemoteInfo").textContent = describe(remoteData, row.updated_at);
+      document.getElementById("conflictLocalInfo").textContent = describe(state, cache.localAt);
+      d.returnValue = "";
+      d.addEventListener("close", () => {
+        sync.conflictOpen = false;
+        if (d.returnValue === "remote") {
+          applyRemote(remoteData, row);
+          toast("Memakai data cloud");
+          setSync("synced");
+        } else if (d.returnValue === "local") {
+          cache.version = row.version; // push berikutnya menimpa versi cloud ini
+          writeCache();
+          toast("Memakai data perangkat ini — mengirim ke cloud…");
+          scheduleSync(0);
+        } else {
+          scheduleSync(30_000); // ditutup tanpa memilih — tanya lagi nanti
+        }
+        resolve();
+      }, { once: true });
+      d.showModal();
+    });
+  }
+
+  // Tarik perubahan dari perangkat lain saat aplikasi kembali dibuka / aktif.
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleSync(200); });
+  window.addEventListener("online", () => scheduleSync(200));
+  window.addEventListener("offline", () => setSync("offline"));
+  setInterval(() => { if (!document.hidden) runSync(); }, 60_000);
 
   // ---------- Date helpers ----------
 
@@ -855,7 +1102,7 @@
   });
 
   $("btnReset").addEventListener("click", () => {
-    if (confirm("Hapus SEMUA data (entri, riwayat termin, pengaturan)? Tindakan ini tidak bisa dibatalkan.")) {
+    if (confirm("Hapus SEMUA data (entri, riwayat termin, pengaturan) di SEMUA perangkat yang memakai akun ini? Tindakan ini tidak bisa dibatalkan.")) {
       state = defaults();
       viewMonth = today().slice(0, 7);
       render();
@@ -863,120 +1110,279 @@
     }
   });
 
-  // ---------- Layar login / buat password ----------
+  // ---------- Layar login / daftar ----------
 
   const lock = {
     screen: $("lockScreen"), form: $("lockForm"), sub: $("lockSub"),
-    pw: $("lockPw"), pw2: $("lockPw2"), pw2Field: $("lockPw2Field"),
-    error: $("lockError"), submit: $("lockSubmit"), note: $("lockNote"), forgot: $("btnForgot"),
-    mode: "login", // "setup" | "login" | "unsupported"
+    email: $("lockEmail"), emailField: $("lockEmailField"),
+    pw: $("lockPw"), pwLabel: $("lockPwLabel"), pw2: $("lockPw2"), pw2Field: $("lockPw2Field"),
+    error: $("lockError"), info: $("lockInfo"), submit: $("lockSubmit"), alt: $("lockAlt"),
+    switchWrap: $("lockSwitchWrap"), switchText: $("lockSwitchText"), switchBtn: $("lockSwitch"),
+    note: $("lockNote"),
+    mode: "login", // "login" | "signup" | "migrate" | "unsupported" | "noconfig"
   };
-  const MIN_PW = 6;
+  const MIN_PW = 8;
+  const LAST_EMAIL_KEY = "cashflow.lastEmail";
+  let pendingSignIn = null; // { email, authSecret } — masuk saat offline, login ke server dicoba lagi saat online
 
-  function showLock(mode, msg = "") {
+  class UserError extends Error {}
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function showLock(mode, { error = "", info = "" } = {}) {
     lock.mode = mode;
-    vault.key = null;
-    state = defaults();
     $("app").hidden = true;
     lock.screen.hidden = false;
-    closeChart();
     for (const d of document.querySelectorAll("dialog[open]")) d.close();
 
-    const setup = mode === "setup";
-    let hasLegacy = false;
-    try { hasLegacy = !!localStorage.getItem(STORE_KEY); } catch { /* abaikan */ }
-
-    lock.sub.textContent =
-      mode === "unsupported" ? "Browser ini tidak mendukung enkripsi. Buka lewat https:// atau localhost dengan browser modern."
-      : setup ? "Buat password untuk mengunci data cashflow di browser ini."
-      : "Masukkan password untuk membuka data.";
-    lock.pw.autocomplete = setup ? "new-password" : "current-password";
-    lock.pw2Field.hidden = !setup;
-    lock.submit.textContent = setup ? "Buat password & masuk" : "Masuk";
-    lock.submit.disabled = mode === "unsupported";
-    lock.note.textContent = setup
-      ? (hasLegacy ? "Data yang sudah ada di browser ini akan dikunci dengan password ini. " : "") +
-        "Password tidak bisa dipulihkan — kalau lupa, data harus dihapus."
+    const signup = mode === "signup", migrate = mode === "migrate";
+    const disabled = mode === "unsupported" || mode === "noconfig";
+    lock.sub.textContent = {
+      login: "Masuk untuk membuka data. Pakai akun yang sama di laptop & HP.",
+      signup: "Buat akun. Data disinkron ke cloud dalam bentuk terenkripsi.",
+      migrate: "Ada data lama di browser ini yang dikunci dengan password lain. Masukkan password lama itu untuk memindahkannya ke akun ini.",
+      unsupported: "Browser ini tidak mendukung enkripsi. Buka lewat https:// atau localhost dengan browser modern.",
+      noconfig: "Sinkron cloud belum dikonfigurasi — isi Supabase URL & anon key di config.js.",
+    }[mode];
+    lock.emailField.hidden = migrate || disabled;
+    lock.pwLabel.textContent = migrate ? "Password lama" : "Password";
+    lock.pw.autocomplete = signup ? "new-password" : "current-password";
+    lock.pw.disabled = disabled;
+    lock.pw2Field.hidden = !signup;
+    lock.submit.textContent = signup ? "Daftar & masuk" : migrate ? "Pindahkan data" : "Masuk";
+    lock.submit.disabled = disabled;
+    lock.alt.hidden = !migrate;
+    lock.alt.textContent = "Lewati — mulai dengan data kosong";
+    lock.switchWrap.hidden = migrate || disabled;
+    lock.switchText.textContent = signup ? "Sudah punya akun?" : "Belum punya akun?";
+    lock.switchBtn.textContent = signup ? "Masuk" : "Daftar";
+    lock.note.textContent = signup
+      ? `Minimal ${MIN_PW} karakter. Password tidak bisa dipulihkan — tanpa password, data tidak bisa dibuka siapa pun, termasuk kamu.`
       : "";
-    lock.forgot.hidden = mode !== "login";
-    lock.error.textContent = msg;
+    lock.error.textContent = error;
+    lock.info.textContent = info;
     lock.pw.value = "";
     lock.pw2.value = "";
-    if (mode !== "unsupported") setTimeout(() => lock.pw.focus(), 0);
+    if (!disabled) setTimeout(() => (lock.emailField.hidden || lock.email.value ? lock.pw : lock.email).focus(), 0);
   }
 
-  async function unlock({ key, salt, iter, data }) {
-    vault.key = key;
-    vault.salt = salt;
-    vault.iter = iter;
-    await rememberSession(key);
+  function enterApp(data, { dirty = false } = {}) {
     state = normalize(data);
     backfillPayoutAmounts();
+    // dirty = data belum ada di cloud (akun baru / migrasi) -> render() akan menyimpan & mengirimnya
+    lastSavedJson = dirty ? null : JSON.stringify(state);
     viewMonth = today().slice(0, 7);
     lock.screen.hidden = true;
     $("app").hidden = false;
     lock.pw.value = "";
     lock.pw2.value = "";
+    $("accountEmail").textContent = (session && session.email) || cache.email || "—";
+    $("pwUser").value = (session && session.email) || cache.email || "";
     render();
+    persistSession();
+    setSync(session ? "syncing" : "offline");
+    scheduleSync(dirty ? 800 : 100);
   }
 
-  function setBusy(btn, busy, label) {
-    btn.disabled = busy;
-    if (busy) { btn.dataset.label = btn.textContent; btn.textContent = "Memproses…"; }
-    else btn.textContent = label || btn.dataset.label || btn.textContent;
+  function useCacheFor(email, userId) {
+    cache = readCache(email);
+    if (userId && cache.userId && cache.userId !== userId) cache = {}; // email dipakai akun lain
+    cache.email = normEmail(email);
+    if (userId) cache.userId = userId;
   }
 
-  lock.form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    if (lock.mode === "unsupported") return;
-    const pw = lock.pw.value;
-    const fail = (m) => { lock.error.textContent = m; };
-    lock.error.textContent = "";
+  // Setelah berhasil login/daftar: tentukan data mana yang dibuka.
+  async function afterAuth(password) {
+    useCacheFor(session.email, session.userId);
 
-    if (lock.mode === "setup") {
-      if (pw.length < MIN_PW) return fail(`Password minimal ${MIN_PW} karakter`);
-      if (pw !== lock.pw2.value) return fail("Password tidak sama");
-    } else if (!pw) {
-      return fail("Masukkan password");
-    }
-
-    setBusy(lock.submit, true);
+    let row;
     try {
-      if (lock.mode === "setup") {
-        const salt = crypto.getRandomValues(new Uint8Array(16));
-        const key = await deriveKey(pw, salt, KDF_ITER);
-        const data = loadLegacy() || defaults();
-        // Tulis versi terenkripsi dulu, baru hapus data lama yang tidak terenkripsi.
-        localStorage.setItem(ENC_KEY, await encryptState({ key, salt, iter: KDF_ITER }, data));
-        try { localStorage.removeItem(STORE_KEY); } catch { /* abaikan */ }
-        setBusy(lock.submit, false);
-        await unlock({ key, salt, iter: KDF_ITER, data });
-        toast("Password dibuat — data sekarang terkunci");
-      } else {
-        const blob = readBlob();
-        if (!blob) { setBusy(lock.submit, false); return showLock("setup"); }
-        const res = await tryPassword(pw, blob);
-        setBusy(lock.submit, false);
-        if (!res) {
-          lock.pw.select();
-          return fail("Password salah");
-        }
-        await unlock(res);
-      }
-    } catch {
-      setBusy(lock.submit, false);
-      fail("Gagal menyimpan — penyimpanan browser mungkin diblokir (mode privat?)");
+      row = await remote.get();      // null = cloud masih kosong
+    } catch (e) {
+      if (!isNetworkError(e)) throw e;
+      row = undefined;               // tidak tahu (koneksi putus)
     }
-  });
 
-  lock.forgot.addEventListener("click", () => {
-    if (!confirm("Tanpa password, data tidak bisa dibuka.\n\nHapus SEMUA data di browser ini dan buat password baru? Tindakan ini tidak bisa dibatalkan.")) return;
+    const local = cache.blob ? await decryptBlob(vault.key, cache.blob).catch(() => null) : null;
+
+    if (row) {
+      const data = await decryptBlob(vault.key, row.data).catch(() => null);
+      if (!data) throw new UserError("Data di cloud tidak bisa dibuka dengan password ini.");
+      // Ada perubahan lokal yang belum terkirim -> buka versi lokal; sinkron akan menangani konfliknya.
+      if (local && cache.dirty) return enterApp(local);
+      cache.blob = row.data;
+      cache.version = row.version;
+      cache.dirty = false;
+      cache.syncedAt = new Date().toISOString();
+      writeCache();
+      return enterApp(data);
+    }
+
+    if (local) return enterApp(local);
+
+    if (row === null) {
+      // Cloud kosong (akun baru): bawa data lama dari browser ini kalau ada.
+      if (hasLegacyLocal()) {
+        const migrated = password ? await decryptLegacyLocal(password) : null;
+        if (migrated) return finishMigration(migrated);
+        return showLock("migrate");
+      }
+      const plain = loadLegacy();
+      if (plain) return finishMigration(plain);
+      return enterApp(defaults(), { dirty: true });
+    }
+    enterApp(defaults());
+  }
+
+  async function finishMigration(data) {
+    enterApp(data, { dirty: true });
+    await vault.writing; // pastikan sudah masuk cache terenkripsi sebelum format lama dihapus
     try {
       localStorage.removeItem(ENC_KEY);
       localStorage.removeItem(STORE_KEY);
     } catch { /* abaikan */ }
-    forgetSession();
-    showLock("setup");
+    toast(`Data lama (${state.entries.length} entri) dipindahkan ke akun cloud`);
+  }
+
+  async function doLogin(email, pw) {
+    const { authSecret, key } = await deriveCredentials(email, pw);
+    let r;
+    try {
+      r = await auth.signIn(email, authSecret);
+    } catch (e) {
+      if (isNetworkError(e)) return offlineUnlock(email, authSecret, key);
+      if (e.code === "email_not_confirmed" || /not confirmed/i.test(e.message)) {
+        throw new UserError("Email belum dikonfirmasi — klik link di email dari Supabase, lalu masuk lagi.");
+      }
+      if (e.status === 429) throw new UserError("Terlalu banyak percobaan — tunggu sebentar lalu coba lagi.");
+      if (e.status === 400 || e.code === "invalid_credentials") throw new UserError("Email atau password salah");
+      throw e;
+    }
+    vault.key = key;
+    setSession(r, email);
+    await afterAuth(pw);
+  }
+
+  // Tanpa koneksi: buka dari cache terenkripsi di perangkat ini (password dicek lewat dekripsi).
+  async function offlineUnlock(email, authSecret, key) {
+    const c = readCache(email);
+    if (!c.blob) throw new UserError("Tidak bisa terhubung ke server. Periksa koneksi internet.");
+    const data = await decryptBlob(key, c.blob).catch(() => null);
+    if (!data) throw new UserError("Email atau password salah");
+    vault.key = key;
+    session = null;
+    cache = c;
+    pendingSignIn = { email, authSecret };
+    enterApp(data);
+    toast("Offline — memakai data terakhir di perangkat ini");
+  }
+
+  async function retrySignIn() {
+    if (!pendingSignIn || retrySignIn.busy) return;
+    retrySignIn.busy = true;
+    try {
+      const r = await auth.signIn(pendingSignIn.email, pendingSignIn.authSecret);
+      setSession(r, pendingSignIn.email);
+      pendingSignIn = null;
+      scheduleSync(0);
+    } catch (e) {
+      if (!isNetworkError(e)) {
+        pendingSignIn = null;
+        setSync("error", "login ke server gagal — keluar lalu masuk lagi");
+      }
+    } finally {
+      retrySignIn.busy = false;
+    }
+  }
+
+  async function doSignup(email, pw) {
+    const { authSecret, key } = await deriveCredentials(email, pw);
+    let r;
+    try {
+      r = await auth.signUp(email, authSecret);
+    } catch (e) {
+      if (isNetworkError(e)) throw new UserError("Tidak bisa terhubung ke server. Periksa koneksi internet.");
+      if (e.code === "user_already_exists" || /already registered|already exists/i.test(e.message)) {
+        throw new UserError("Email ini sudah terdaftar — pilih Masuk.");
+      }
+      if (e.code === "email_address_invalid" || e.code === "validation_failed") throw new UserError("Format email tidak valid");
+      if (e.status === 429) throw new UserError("Terlalu banyak percobaan — tunggu sebentar lalu coba lagi.");
+      throw e;
+    }
+    if (!r || !r.access_token) {
+      // Proyek Supabase mewajibkan konfirmasi email dulu.
+      showLock("login", { info: `Akun dibuat. Cek inbox ${email}, klik link konfirmasi, lalu masuk di sini.` });
+      lock.email.value = email;
+      return;
+    }
+    vault.key = key;
+    setSession(r, email);
+    await afterAuth(pw);
+  }
+
+  function setBusy(btn, busy) {
+    if (busy) {
+      btn.dataset.label = btn.textContent;
+      btn.textContent = "Memproses…";
+      btn.disabled = true;
+    } else {
+      if (btn.textContent === "Memproses…") btn.textContent = btn.dataset.label || "";
+      btn.disabled = false;
+    }
+  }
+
+  lock.form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (lock.submit.disabled) return;
+    const mode = lock.mode;
+    const email = normEmail(lock.email.value);
+    const pw = lock.pw.value;
+    const fail = (m) => { lock.error.textContent = m; };
+    lock.error.textContent = "";
+    lock.info.textContent = "";
+
+    if (mode === "migrate") {
+      if (!pw) return fail("Masukkan password lama");
+    } else {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Masukkan email yang valid");
+      if (mode === "signup") {
+        if (pw.length < MIN_PW) return fail(`Password minimal ${MIN_PW} karakter`);
+        if (pw !== lock.pw2.value) return fail("Password tidak sama");
+      } else if (!pw) {
+        return fail("Masukkan password");
+      }
+    }
+
+    setBusy(lock.submit, true);
+    try {
+      if (mode === "migrate") {
+        const data = await decryptLegacyLocal(pw);
+        if (!data) throw new UserError("Password lama salah");
+        await finishMigration(data);
+      } else {
+        try { localStorage.setItem(LAST_EMAIL_KEY, email); } catch { /* abaikan */ }
+        await (mode === "signup" ? doSignup(email, pw) : doLogin(email, pw));
+      }
+    } catch (e) {
+      if (lock.screen.hidden === false && mode !== "migrate") {
+        // gagal di tengah jalan -> jangan tinggalkan sesi setengah jadi
+        vault.key = null;
+        session = null;
+        forgetSession();
+      }
+      fail(e instanceof UserError ? e.message : `Terjadi kesalahan: ${e.message}`);
+      if (lock.mode === "login" || lock.mode === "migrate") lock.pw.select();
+    } finally {
+      setBusy(lock.submit, false);
+    }
+  });
+
+  lock.switchBtn.addEventListener("click", () => {
+    showLock(lock.mode === "signup" ? "login" : "signup");
+  });
+
+  lock.alt.addEventListener("click", () => {
+    if (!confirm("Mulai dengan data kosong? Data lama tetap tersimpan (terkunci) di browser ini.")) return;
+    enterApp(defaults(), { dirty: true });
   });
 
   // Tombol "Lihat" — tampilkan/sembunyikan password di form yang sama
@@ -994,7 +1400,13 @@
   });
 
   $("btnLock").addEventListener("click", async () => {
-    await vault.writing; // pastikan simpanan terakhir sudah tertulis
+    await vault.writing;
+    if (cache.dirty && session) {
+      setSync("syncing");
+      await Promise.race([runSync(), sleep(5000)]);
+    }
+    if (cache.dirty && !confirm("Ada perubahan yang belum terkirim ke cloud. Perubahan tetap tersimpan di perangkat ini dan dikirim saat kamu masuk lagi.\n\nKeluar sekarang?")) return;
+    if (session) await Promise.race([auth.logout(session.access_token).catch(() => {}), sleep(1500)]);
     forgetSession();
     // Muat ulang halaman supaya data yang sudah didekripsi tidak tersisa di memori/DOM.
     location.reload();
@@ -1021,28 +1433,42 @@
     if (!oldPw) return fail("Masukkan password lama");
     if (newPw.length < MIN_PW) return fail(`Password baru minimal ${MIN_PW} karakter`);
     if (newPw !== $("pwNew2").value) return fail("Password baru tidak sama");
+    if (newPw === oldPw) return fail("Password baru harus berbeda");
+    if (!session) return fail("Butuh koneksi internet untuk ganti password");
 
     const btn = $("btnPwSave");
     setBusy(btn, true);
     try {
-      await vault.writing;
-      const blob = readBlob();
-      if (!blob || !(await tryPassword(oldPw, blob))) {
-        setBusy(btn, false);
-        return fail("Password lama salah");
+      const email = session.email;
+      const oldC = await deriveCredentials(email, oldPw);
+      try {
+        setSession(await auth.signIn(email, oldC.authSecret), email);
+      } catch (e) {
+        throw new UserError(isNetworkError(e) ? "Tidak bisa terhubung ke server" : "Password lama salah");
       }
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const key = await deriveKey(newPw, salt, KDF_ITER);
-      // Tulis langsung (bukan lewat antrean) supaya kegagalan terlihat di sini.
-      localStorage.setItem(ENC_KEY, await encryptState({ key, salt, iter: KDF_ITER }, state));
-      Object.assign(vault, { key, salt, iter: KDF_ITER });
-      await rememberSession(key);
+      // Pastikan cloud sudah berisi data terbaru sebelum kunci diganti.
+      await vault.writing;
+      await runSync();
+      if (cache.dirty) throw new UserError("Sinkron belum selesai — coba lagi sebentar");
+
+      const newC = await deriveCredentials(email, newPw);
+      const blob = await encryptJson(newC.key, JSON.stringify(state));
+      await remote.updatePassword(newC.authSecret);
+      // Login sudah pakai password baru -> mulai sekarang data dienkripsi dengan kunci baru.
+      vault.key = newC.key;
+      cache.blob = blob;
+      cache.dirty = true;
+      cache.localAt = new Date().toISOString();
+      writeCache();
+      lastSavedJson = JSON.stringify(state);
+      persistSession();
+      await runSync();
       setBusy(btn, false);
       pwDlg.close();
-      toast("Password diganti");
-    } catch {
+      toast(cache.dirty ? "Password diganti — data dikirim ke cloud saat online" : "Password diganti di semua perangkat");
+    } catch (e) {
       setBusy(btn, false);
-      fail("Gagal menyimpan password baru");
+      fail(e instanceof UserError ? e.message : `Gagal ganti password: ${e.message}`);
     }
   });
 
@@ -1052,23 +1478,28 @@
     let theme = null;
     try { theme = localStorage.getItem(THEME_KEY); } catch { /* abaikan */ }
     applyTheme(theme === "light" || theme === "dark" ? theme : (loadLegacy() || defaults()).theme);
+    setSync("idle");
 
     if (!(globalThis.crypto && crypto.subtle)) return showLock("unsupported");
+    if (!cloudConfigured()) return showLock("noconfig");
 
-    const blob = readBlob();
-    if (!blob) return showLock("setup");
-
-    // Masih dalam sesi yang sama (refresh halaman) — pakai kunci sesi, tidak perlu password lagi.
+    // Masih di tab yang sama (refresh halaman) — pakai kunci & token sesi, tidak perlu password lagi.
     try {
-      const jwk = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
-      if (jwk) {
-        const key = await crypto.subtle.importKey("jwk", jwk, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
-        const data = await decryptBlob(key, blob);
-        return unlock({ key, salt: fromB64(blob.salt), iter: blob.iter || KDF_ITER, data });
+      const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+      if (saved && saved.jwk && saved.session) {
+        vault.key = await crypto.subtle.importKey("jwk", saved.jwk, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+        session = saved.session;
+        useCacheFor(session.email, session.userId);
+        if (cache.blob) return enterApp(await decryptBlob(vault.key, cache.blob));
+        return await afterAuth(null);
       }
     } catch {
       forgetSession();
+      vault.key = null;
+      session = null;
     }
+
+    try { lock.email.value = localStorage.getItem(LAST_EMAIL_KEY) || ""; } catch { /* abaikan */ }
     showLock("login");
   }
 

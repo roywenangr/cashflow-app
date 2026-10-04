@@ -8,15 +8,18 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Login / buat password -->
+  <!-- Login / daftar -->
   <section class="lock" id="lockScreen" hidden>
     <form class="lock__card" id="lockForm" novalidate>
       <span class="topbar__logo lock__logo" aria-hidden="true">Rp</span>
       <h1 class="lock__title">Cashflow</h1>
-      <p class="lock__sub" id="lockSub">Masukkan password untuk membuka data.</p>
-      <input type="text" name="username" autocomplete="username" value="cashflow" class="sr-only" tabindex="-1" aria-hidden="true">
+      <p class="lock__sub" id="lockSub">Masuk untuk membuka data.</p>
+      <label class="field" id="lockEmailField">
+        <span>Email</span>
+        <input type="email" id="lockEmail" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false">
+      </label>
       <label class="field">
-        <span>Password</span>
+        <span id="lockPwLabel">Password</span>
         <span class="pw">
           <input type="password" id="lockPw" autocomplete="current-password">
           <button type="button" class="pw__toggle" data-pw-toggle aria-label="Tampilkan password">Lihat</button>
@@ -27,9 +30,14 @@
         <input type="password" id="lockPw2" autocomplete="new-password">
       </label>
       <p class="form-error" id="lockError" role="alert"></p>
+      <p class="form-info" id="lockInfo" role="status"></p>
       <button type="submit" class="btn btn--primary btn--block" id="lockSubmit">Masuk</button>
+      <button type="button" class="btn btn--ghost btn--block" id="lockAlt" hidden>Lewati</button>
+      <p class="lock__switch" id="lockSwitchWrap">
+        <span id="lockSwitchText">Belum punya akun?</span>
+        <button type="button" class="link-btn" id="lockSwitch">Daftar</button>
+      </p>
       <p class="lock__note" id="lockNote"></p>
-      <button type="button" class="link-btn link-btn--danger lock__forgot" id="btnForgot" hidden>Lupa password?</button>
     </form>
   </section>
 
@@ -51,7 +59,7 @@
         <button class="icon-btn" id="btnSettings" aria-label="Pengaturan" title="Pengaturan">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
-        <button class="icon-btn" id="btnLock" aria-label="Kunci aplikasi" title="Kunci (keluar)">
+        <button class="icon-btn" id="btnLock" aria-label="Keluar" title="Keluar">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         </button>
         <button class="icon-btn" id="btnTheme" aria-label="Ganti tema" title="Ganti tema">
@@ -222,7 +230,8 @@
     </section>
 
     <footer class="footer">
-      <p>Data terenkripsi di browser ini. <button class="link-btn" id="btnExport">Export JSON</button> · <button class="link-btn" id="btnImport">Import JSON</button> ·<button class="link-btn link-btn--danger" id="btnReset">Reset data</button></p>
+      <p><span class="sync" id="syncStatus" data-state="idle"><span class="sync__dot"></span><span id="syncText">—</span></span></p>
+      <p>Data terenkripsi sebelum dikirim ke cloud. <button class="link-btn" id="btnExport">Export JSON</button> · <button class="link-btn" id="btnImport">Import JSON</button> ·<button class="link-btn link-btn--danger" id="btnReset">Reset data</button></p>
     </footer>
   </div>
 
@@ -244,7 +253,8 @@
         <small>Termin 1: tanggal 1 s/d batas · Termin 2: setelahnya s/d akhir bulan. Default 15.</small>
       </label>
       <div class="field">
-        <span>Keamanan</span>
+        <span>Akun</span>
+        <p class="account" id="accountEmail">—</p>
         <button type="button" class="btn btn--ghost" id="btnChangePw">Ganti password</button>
       </div>
       <div class="dialog__actions">
@@ -258,7 +268,7 @@
   <dialog id="pwDialog" class="dialog">
     <form class="dialog__form" id="pwForm" novalidate>
       <h3>Ganti password</h3>
-      <input type="text" name="username" autocomplete="username" value="cashflow" class="sr-only" tabindex="-1" aria-hidden="true">
+      <input type="email" id="pwUser" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true">
       <label class="field">
         <span>Password lama</span>
         <input type="password" id="pwOld" autocomplete="current-password">
@@ -266,7 +276,7 @@
       <label class="field">
         <span>Password baru</span>
         <input type="password" id="pwNew" autocomplete="new-password">
-        <small>Minimal 6 karakter.</small>
+        <small>Minimal 8 karakter. Berlaku di semua perangkat.</small>
       </label>
       <label class="field">
         <span>Ulangi password baru</span>
@@ -280,10 +290,22 @@
     </form>
   </dialog>
 
+  <!-- Konflik sinkron -->
+  <dialog id="conflictDialog" class="dialog">
+    <form method="dialog" class="dialog__form">
+      <h3>Data berbeda dengan cloud</h3>
+      <p class="dialog__text">Data di cloud sudah diubah dari perangkat lain, sementara perangkat ini juga punya perubahan yang belum tersinkron. Pilih data yang mau dipakai:</p>
+      <button value="remote" class="btn btn--primary btn--block btn--stack">Pakai data cloud<small id="conflictRemoteInfo"></small></button>
+      <button value="local" class="btn btn--ghost btn--block btn--stack">Pakai data perangkat ini<small id="conflictLocalInfo"></small></button>
+      <p class="lock__note">Data yang tidak dipilih akan ditimpa dan tidak bisa dikembalikan.</p>
+    </form>
+  </dialog>
+
   <input type="file" id="importFile" accept="application/json,.json" hidden>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

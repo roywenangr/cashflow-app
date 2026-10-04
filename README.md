@@ -6,8 +6,10 @@ Aplikasi web sederhana untuk mencatat margin kotor, menghitung share partner per
 - Tandai termin sudah dibayar — nominal yang dibayar disimpan, jadi riwayat tidak berubah
 - Grafik cashflow per bulan dengan pilihan rentang (6 bln, 12 bln, tahun ini, semua, atau custom)
 - Tema gelap/terang, export & import backup JSON
+- Login dengan password — data dienkripsi (AES-256-GCM, kunci dari PBKDF2) sebelum disimpan
 
-Semua data tersimpan di `localStorage` browser — tidak ada server, tidak ada data yang dikirim ke mana pun.
+Semua data tersimpan di `localStorage` browser dalam bentuk terenkripsi — tidak ada server, tidak ada data yang dikirim ke mana pun.
+Password tidak bisa dipulihkan; kalau lupa, data di browser itu harus dihapus. Rutin **Export JSON** sebagai cadangan (file export tidak terenkripsi).
 Data tidak sinkron antar perangkat/browser; pakai **Export JSON** / **Import JSON** untuk memindahkan.
 
 ## Menjalankan lokal

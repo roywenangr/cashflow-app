@@ -1,12 +1,16 @@
 /* ============================================================
    Cashflow — Profit Sharing
-   Semua data tersimpan di localStorage (browser lokal).
+   Semua data tersimpan di localStorage (browser lokal), terenkripsi
+   dengan kunci yang diturunkan dari password pengguna.
    ============================================================ */
 
 (() => {
   "use strict";
 
-  const STORE_KEY = "cashflow.v1";
+  const STORE_KEY = "cashflow.v1";        // format lama (tidak terenkripsi) — hanya dibaca untuk migrasi
+  const ENC_KEY = "cashflow.enc.v1";      // data terenkripsi
+  const SESSION_KEY = "cashflow.session"; // kunci sesi; hilang saat tab ditutup
+  const THEME_KEY = "cashflow.theme";     // tema disimpan terpisah supaya layar login ikut tema
 
   // ---------- State ----------
 
@@ -28,16 +32,15 @@
 
   const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
-  let state = load();
+  let state = defaults(); // diisi setelah login
   let viewMonth = today().slice(0, 7); // "YYYY-MM"
-  backfillPayoutAmounts();
 
-  function load() {
+  function loadLegacy() {
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      return raw ? normalize(JSON.parse(raw)) : defaults();
+      return raw ? normalize(JSON.parse(raw)) : null;
     } catch {
-      return defaults();
+      return null;
     }
   }
 
@@ -93,13 +96,79 @@
   }
 
   function save() {
+    if (!vault.key) return;
+    // Enkripsi dimulai sekarang (snapshot state saat ini); penulisan diantrekan supaya urutannya terjaga.
+    const payload = encryptState(vault, state);
+    vault.writing = vault.writing
+      .then(() => payload)
+      .then((blob) => localStorage.setItem(ENC_KEY, blob))
+      .catch(() => {
+        // localStorage bisa diblokir (mode privat / file:// di sebagian browser).
+        // Aplikasi tetap jalan untuk sesi ini; data hilang saat tab ditutup.
+        warnOnce();
+      });
+  }
+
+  // ---------- Enkripsi ----------
+  // AES-GCM 256-bit; kunci dari password via PBKDF2-SHA256. Salt & IV acak disimpan bersama ciphertext.
+  // Kode aplikasi boleh publik — tanpa password, isi localStorage tidak bisa dibaca.
+
+  const KDF_ITER = 600_000;
+  const vault = { key: null, salt: null, iter: KDF_ITER, writing: Promise.resolve() };
+
+  function toB64(buf) {
+    const bytes = new Uint8Array(buf);
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+  async function deriveKey(password, salt, iter) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt, iterations: iter, hash: "SHA-256" },
+      base, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  }
+
+  async function encryptState({ key, salt, iter }, data) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(data)));
+    return JSON.stringify({ v: 1, kdf: "PBKDF2-SHA256", iter, salt: toB64(salt), iv: toB64(iv), data: toB64(ct) });
+  }
+
+  async function decryptBlob(key, blob) {
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(blob.iv) }, key, fromB64(blob.data));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }
+
+  function readBlob() {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      const raw = localStorage.getItem(ENC_KEY);
+      return raw ? JSON.parse(raw) : null;
     } catch {
-      // localStorage bisa diblokir (mode privat / file:// di sebagian browser).
-      // Aplikasi tetap jalan untuk sesi ini; data hilang saat tab ditutup.
-      warnOnce();
+      return null;
     }
+  }
+
+  // Coba password ke data tersimpan; null kalau salah.
+  async function tryPassword(password, blob) {
+    const salt = fromB64(blob.salt);
+    const iter = blob.iter || KDF_ITER;
+    const key = await deriveKey(password, salt, iter);
+    try {
+      return { key, salt, iter, data: await decryptBlob(key, blob) };
+    } catch {
+      return null;
+    }
+  }
+
+  async function rememberSession(key) {
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(await crypto.subtle.exportKey("jwk", key))); } catch { /* sesi tidak diingat */ }
+  }
+
+  function forgetSession() {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch { /* abaikan */ }
   }
 
   let warned = false;
@@ -395,10 +464,15 @@
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
 
-  function render() {
-    document.documentElement.dataset.theme = state.theme;
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = state.theme === "light" ? "#f9f9f7" : "#0d0d0d";
+    if (meta) meta.content = theme === "light" ? "#f9f9f7" : "#0d0d0d";
+  }
+
+  function render() {
+    applyTheme(state.theme);
+    try { localStorage.setItem(THEME_KEY, state.theme); } catch { /* abaikan */ }
 
     els.partnerLabel.textContent = `Profit sharing · ${state.settings.partnerName} (${state.settings.sharePct}%)`;
     els.monthTitle.textContent = monthLabel(viewMonth);
@@ -755,7 +829,7 @@
     a.remove();
     // Safari membatalkan unduhan kalau URL dicabut langsung setelah click()
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    toast("Backup JSON diunduh");
+    toast("Backup diunduh — file ini TIDAK terenkripsi, simpan di tempat aman");
   });
 
   const importInput = $("importFile");
@@ -789,7 +863,214 @@
     }
   });
 
+  // ---------- Layar login / buat password ----------
+
+  const lock = {
+    screen: $("lockScreen"), form: $("lockForm"), sub: $("lockSub"),
+    pw: $("lockPw"), pw2: $("lockPw2"), pw2Field: $("lockPw2Field"),
+    error: $("lockError"), submit: $("lockSubmit"), note: $("lockNote"), forgot: $("btnForgot"),
+    mode: "login", // "setup" | "login" | "unsupported"
+  };
+  const MIN_PW = 6;
+
+  function showLock(mode, msg = "") {
+    lock.mode = mode;
+    vault.key = null;
+    state = defaults();
+    $("app").hidden = true;
+    lock.screen.hidden = false;
+    closeChart();
+    for (const d of document.querySelectorAll("dialog[open]")) d.close();
+
+    const setup = mode === "setup";
+    let hasLegacy = false;
+    try { hasLegacy = !!localStorage.getItem(STORE_KEY); } catch { /* abaikan */ }
+
+    lock.sub.textContent =
+      mode === "unsupported" ? "Browser ini tidak mendukung enkripsi. Buka lewat https:// atau localhost dengan browser modern."
+      : setup ? "Buat password untuk mengunci data cashflow di browser ini."
+      : "Masukkan password untuk membuka data.";
+    lock.pw.autocomplete = setup ? "new-password" : "current-password";
+    lock.pw2Field.hidden = !setup;
+    lock.submit.textContent = setup ? "Buat password & masuk" : "Masuk";
+    lock.submit.disabled = mode === "unsupported";
+    lock.note.textContent = setup
+      ? (hasLegacy ? "Data yang sudah ada di browser ini akan dikunci dengan password ini. " : "") +
+        "Password tidak bisa dipulihkan — kalau lupa, data harus dihapus."
+      : "";
+    lock.forgot.hidden = mode !== "login";
+    lock.error.textContent = msg;
+    lock.pw.value = "";
+    lock.pw2.value = "";
+    if (mode !== "unsupported") setTimeout(() => lock.pw.focus(), 0);
+  }
+
+  async function unlock({ key, salt, iter, data }) {
+    vault.key = key;
+    vault.salt = salt;
+    vault.iter = iter;
+    await rememberSession(key);
+    state = normalize(data);
+    backfillPayoutAmounts();
+    viewMonth = today().slice(0, 7);
+    lock.screen.hidden = true;
+    $("app").hidden = false;
+    lock.pw.value = "";
+    lock.pw2.value = "";
+    render();
+  }
+
+  function setBusy(btn, busy, label) {
+    btn.disabled = busy;
+    if (busy) { btn.dataset.label = btn.textContent; btn.textContent = "Memproses…"; }
+    else btn.textContent = label || btn.dataset.label || btn.textContent;
+  }
+
+  lock.form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (lock.mode === "unsupported") return;
+    const pw = lock.pw.value;
+    const fail = (m) => { lock.error.textContent = m; };
+    lock.error.textContent = "";
+
+    if (lock.mode === "setup") {
+      if (pw.length < MIN_PW) return fail(`Password minimal ${MIN_PW} karakter`);
+      if (pw !== lock.pw2.value) return fail("Password tidak sama");
+    } else if (!pw) {
+      return fail("Masukkan password");
+    }
+
+    setBusy(lock.submit, true);
+    try {
+      if (lock.mode === "setup") {
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const key = await deriveKey(pw, salt, KDF_ITER);
+        const data = loadLegacy() || defaults();
+        // Tulis versi terenkripsi dulu, baru hapus data lama yang tidak terenkripsi.
+        localStorage.setItem(ENC_KEY, await encryptState({ key, salt, iter: KDF_ITER }, data));
+        try { localStorage.removeItem(STORE_KEY); } catch { /* abaikan */ }
+        setBusy(lock.submit, false);
+        await unlock({ key, salt, iter: KDF_ITER, data });
+        toast("Password dibuat — data sekarang terkunci");
+      } else {
+        const blob = readBlob();
+        if (!blob) { setBusy(lock.submit, false); return showLock("setup"); }
+        const res = await tryPassword(pw, blob);
+        setBusy(lock.submit, false);
+        if (!res) {
+          lock.pw.select();
+          return fail("Password salah");
+        }
+        await unlock(res);
+      }
+    } catch {
+      setBusy(lock.submit, false);
+      fail("Gagal menyimpan — penyimpanan browser mungkin diblokir (mode privat?)");
+    }
+  });
+
+  lock.forgot.addEventListener("click", () => {
+    if (!confirm("Tanpa password, data tidak bisa dibuka.\n\nHapus SEMUA data di browser ini dan buat password baru? Tindakan ini tidak bisa dibatalkan.")) return;
+    try {
+      localStorage.removeItem(ENC_KEY);
+      localStorage.removeItem(STORE_KEY);
+    } catch { /* abaikan */ }
+    forgetSession();
+    showLock("setup");
+  });
+
+  // Tombol "Lihat" — tampilkan/sembunyikan password di form yang sama
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-pw-toggle]");
+    if (!btn) return;
+    const inputs = btn.closest("form").querySelectorAll('input[type="password"], input[data-pw-shown]');
+    const show = btn.textContent === "Lihat";
+    for (const i of inputs) {
+      i.type = show ? "text" : "password";
+      if (show) i.dataset.pwShown = ""; else delete i.dataset.pwShown;
+    }
+    btn.textContent = show ? "Sembunyikan" : "Lihat";
+    btn.setAttribute("aria-label", show ? "Sembunyikan password" : "Tampilkan password");
+  });
+
+  $("btnLock").addEventListener("click", async () => {
+    await vault.writing; // pastikan simpanan terakhir sudah tertulis
+    forgetSession();
+    // Muat ulang halaman supaya data yang sudah didekripsi tidak tersisa di memori/DOM.
+    location.reload();
+  });
+
+  // ---------- Ganti password ----------
+
+  const pwDlg = $("pwDialog");
+
+  $("btnChangePw").addEventListener("click", () => {
+    dlg.close();
+    for (const id of ["pwOld", "pwNew", "pwNew2"]) $(id).value = "";
+    $("pwError").textContent = "";
+    pwDlg.showModal();
+  });
+
+  $("btnPwCancel").addEventListener("click", () => pwDlg.close());
+
+  $("pwForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const oldPw = $("pwOld").value, newPw = $("pwNew").value;
+    const fail = (m) => { $("pwError").textContent = m; };
+    $("pwError").textContent = "";
+    if (!oldPw) return fail("Masukkan password lama");
+    if (newPw.length < MIN_PW) return fail(`Password baru minimal ${MIN_PW} karakter`);
+    if (newPw !== $("pwNew2").value) return fail("Password baru tidak sama");
+
+    const btn = $("btnPwSave");
+    setBusy(btn, true);
+    try {
+      await vault.writing;
+      const blob = readBlob();
+      if (!blob || !(await tryPassword(oldPw, blob))) {
+        setBusy(btn, false);
+        return fail("Password lama salah");
+      }
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const key = await deriveKey(newPw, salt, KDF_ITER);
+      // Tulis langsung (bukan lewat antrean) supaya kegagalan terlihat di sini.
+      localStorage.setItem(ENC_KEY, await encryptState({ key, salt, iter: KDF_ITER }, state));
+      Object.assign(vault, { key, salt, iter: KDF_ITER });
+      await rememberSession(key);
+      setBusy(btn, false);
+      pwDlg.close();
+      toast("Password diganti");
+    } catch {
+      setBusy(btn, false);
+      fail("Gagal menyimpan password baru");
+    }
+  });
+
   // ---------- Init ----------
 
-  render();
+  async function start() {
+    let theme = null;
+    try { theme = localStorage.getItem(THEME_KEY); } catch { /* abaikan */ }
+    applyTheme(theme === "light" || theme === "dark" ? theme : (loadLegacy() || defaults()).theme);
+
+    if (!(globalThis.crypto && crypto.subtle)) return showLock("unsupported");
+
+    const blob = readBlob();
+    if (!blob) return showLock("setup");
+
+    // Masih dalam sesi yang sama (refresh halaman) — pakai kunci sesi, tidak perlu password lagi.
+    try {
+      const jwk = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+      if (jwk) {
+        const key = await crypto.subtle.importKey("jwk", jwk, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+        const data = await decryptBlob(key, blob);
+        return unlock({ key, salt: fromB64(blob.salt), iter: blob.iter || KDF_ITER, data });
+      }
+    } catch {
+      forgetSession();
+    }
+    showLock("login");
+  }
+
+  start();
 })();

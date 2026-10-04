@@ -8,7 +8,32 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app">
+  <!-- Login / buat password -->
+  <section class="lock" id="lockScreen" hidden>
+    <form class="lock__card" id="lockForm" novalidate>
+      <span class="topbar__logo lock__logo" aria-hidden="true">Rp</span>
+      <h1 class="lock__title">Cashflow</h1>
+      <p class="lock__sub" id="lockSub">Masukkan password untuk membuka data.</p>
+      <input type="text" name="username" autocomplete="username" value="cashflow" class="sr-only" tabindex="-1" aria-hidden="true">
+      <label class="field">
+        <span>Password</span>
+        <span class="pw">
+          <input type="password" id="lockPw" autocomplete="current-password">
+          <button type="button" class="pw__toggle" data-pw-toggle aria-label="Tampilkan password">Lihat</button>
+        </span>
+      </label>
+      <label class="field" id="lockPw2Field" hidden>
+        <span>Ulangi password</span>
+        <input type="password" id="lockPw2" autocomplete="new-password">
+      </label>
+      <p class="form-error" id="lockError" role="alert"></p>
+      <button type="submit" class="btn btn--primary btn--block" id="lockSubmit">Masuk</button>
+      <p class="lock__note" id="lockNote"></p>
+      <button type="button" class="link-btn link-btn--danger lock__forgot" id="btnForgot" hidden>Lupa password?</button>
+    </form>
+  </section>
+
+  <div class="app" id="app" hidden>
 
     <!-- Header -->
     <header class="topbar">
@@ -25,6 +50,9 @@
         </button>
         <button class="icon-btn" id="btnSettings" aria-label="Pengaturan" title="Pengaturan">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button class="icon-btn" id="btnLock" aria-label="Kunci aplikasi" title="Kunci (keluar)">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         </button>
         <button class="icon-btn" id="btnTheme" aria-label="Ganti tema" title="Ganti tema">
           <svg class="ico-moon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -194,7 +222,7 @@
     </section>
 
     <footer class="footer">
-      <p>Data tersimpan lokal di browser ini. <button class="link-btn" id="btnExport">Export JSON</button> · <button class="link-btn" id="btnImport">Import JSON</button> ·<button class="link-btn link-btn--danger" id="btnReset">Reset data</button></p>
+      <p>Data terenkripsi di browser ini. <button class="link-btn" id="btnExport">Export JSON</button> · <button class="link-btn" id="btnImport">Import JSON</button> ·<button class="link-btn link-btn--danger" id="btnReset">Reset data</button></p>
     </footer>
   </div>
 
@@ -215,9 +243,39 @@
         <input type="number" id="setCutoff" min="8" max="23" step="1">
         <small>Termin 1: tanggal 1 s/d batas · Termin 2: setelahnya s/d akhir bulan. Default 15.</small>
       </label>
+      <div class="field">
+        <span>Keamanan</span>
+        <button type="button" class="btn btn--ghost" id="btnChangePw">Ganti password</button>
+      </div>
       <div class="dialog__actions">
         <button value="cancel" class="btn btn--ghost" id="btnCancelSettings">Batal</button>
         <button value="ok" class="btn btn--primary" id="btnSaveSettings">Simpan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Ganti password -->
+  <dialog id="pwDialog" class="dialog">
+    <form class="dialog__form" id="pwForm" novalidate>
+      <h3>Ganti password</h3>
+      <input type="text" name="username" autocomplete="username" value="cashflow" class="sr-only" tabindex="-1" aria-hidden="true">
+      <label class="field">
+        <span>Password lama</span>
+        <input type="password" id="pwOld" autocomplete="current-password">
+      </label>
+      <label class="field">
+        <span>Password baru</span>
+        <input type="password" id="pwNew" autocomplete="new-password">
+        <small>Minimal 6 karakter.</small>
+      </label>
+      <label class="field">
+        <span>Ulangi password baru</span>
+        <input type="password" id="pwNew2" autocomplete="new-password">
+      </label>
+      <p class="form-error" id="pwError" role="alert"></p>
+      <div class="dialog__actions">
+        <button type="button" class="btn btn--ghost" id="btnPwCancel">Batal</button>
+        <button type="submit" class="btn btn--primary" id="btnPwSave">Simpan</button>
       </div>
     </form>
   </dialog>

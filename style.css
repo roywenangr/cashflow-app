@@ -92,6 +92,72 @@ body {
   padding: max(16px, env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom));
 }
 
+/* ---------- Login / lock ---------- */
+
+.lock {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+.lock[hidden] { display: none; }
+
+.lock__card {
+  width: min(380px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px 22px 22px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  box-shadow: var(--shadow);
+}
+.lock__logo { width: 48px; height: 48px; flex-basis: 48px; border-radius: 14px; font-size: 19px; align-self: center; }
+.lock__title { margin: 0; text-align: center; font-size: 21px; font-weight: 650; letter-spacing: -0.02em; }
+.lock__sub { margin: -8px 0 4px; text-align: center; font-size: 13.5px; color: var(--text-secondary); }
+.lock__note { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text-muted); text-align: center; }
+.lock__note:empty { display: none; }
+.lock__forgot { align-self: center; font-size: 12.5px; }
+.lock .field[hidden] { display: none; }
+
+/* input password + tombol Lihat */
+.pw { position: relative; display: block; }
+.pw input { padding-right: 96px; }
+.pw__toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pw__toggle:hover { color: var(--text-primary); }
+
+.form-error { margin: -4px 0 0; font-size: 13px; font-weight: 500; color: var(--critical); }
+.form-error:empty { display: none; }
+
+.btn:disabled { opacity: 0.6; cursor: progress; transform: none; }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------- Topbar ---------- */
 
 .topbar {
@@ -102,7 +168,8 @@ body {
   padding: 8px 0 20px;
 }
 
-.topbar__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.topbar__brand { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+.topbar__brand > div { min-width: 0; } /* supaya subjudul bisa terpotong "…" */
 
 .topbar__logo {
   display: grid;
@@ -863,6 +930,9 @@ body {
 /* ---------- Responsive ---------- */
 
 @media (max-width: 480px) {
+  .topbar { gap: 8px; }
+  .topbar__actions { gap: 4px; }
+  .topbar__actions .icon-btn { width: 36px; height: 36px; border-radius: 10px; }
   .tiles { grid-template-columns: 1fr 1fr; }
   .tile__value { font-size: 17px; }
   .termins { grid-template-columns: 1fr; }

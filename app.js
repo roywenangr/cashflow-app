@@ -241,11 +241,30 @@
   }
 
   const auth = {
-    signUp: (email, secret) => http("POST", "/auth/v1/signup", { body: { email, password: secret } }),
+    // redirect_to: link konfirmasi di email kembali ke alamat aplikasi ini
+    // (harus terdaftar di Supabase > Authentication > URL Configuration > Redirect URLs; kalau tidak, dipakai Site URL)
+    signUp: (email, secret) => http("POST", "/auth/v1/signup?redirect_to=" + encodeURIComponent(appUrl()), { body: { email, password: secret } }),
     signIn: (email, secret) => http("POST", "/auth/v1/token?grant_type=password", { body: { email, password: secret } }),
     refresh: (rt) => http("POST", "/auth/v1/token?grant_type=refresh_token", { body: { refresh_token: rt } }),
     logout: (token) => http("POST", "/auth/v1/logout", { token }),
   };
+
+  const appUrl = () => location.origin + location.pathname.replace(/index\.html$/, "");
+
+  // Kembali dari link konfirmasi email: Supabase menaruh hasilnya di #hash. Token di situ tidak dipakai —
+  // kunci enkripsi tetap butuh password — cukup beri tahu hasilnya lalu bersihkan URL.
+  function readAuthRedirect() {
+    const h = new URLSearchParams(location.hash.slice(1));
+    if (!h.has("access_token") && !h.has("error") && !h.has("error_code")) return null;
+    history.replaceState(null, "", location.pathname + location.search);
+    if (h.get("error_code") === "otp_expired") {
+      return { error: "Link konfirmasi sudah kedaluwarsa atau sudah pernah dipakai. Coba masuk — kalau ditolak, daftar ulang." };
+    }
+    if (h.has("error") || h.has("error_code")) {
+      return { error: "Konfirmasi gagal: " + (h.get("error_description") || h.get("error_code") || h.get("error")).replace(/\+/g, " ") };
+    }
+    return { info: "Email sudah dikonfirmasi — silakan masuk." };
+  }
 
   async function freshToken() {
     if (!session) throw new ApiError(401, { msg: "not signed in" });
@@ -1479,6 +1498,7 @@
     try { theme = localStorage.getItem(THEME_KEY); } catch { /* abaikan */ }
     applyTheme(theme === "light" || theme === "dark" ? theme : (loadLegacy() || defaults()).theme);
     setSync("idle");
+    const authRedirect = readAuthRedirect();
 
     if (!(globalThis.crypto && crypto.subtle)) return showLock("unsupported");
     if (!cloudConfigured()) return showLock("noconfig");
@@ -1500,7 +1520,7 @@
     }
 
     try { lock.email.value = localStorage.getItem(LAST_EMAIL_KEY) || ""; } catch { /* abaikan */ }
-    showLock("login");
+    showLock("login", authRedirect || {});
   }
 
   start();

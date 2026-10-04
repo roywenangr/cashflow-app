@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0d0d">
+  <title>Cashflow — Profit Sharing</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header class="topbar">
+      <div class="topbar__brand">
+        <span class="topbar__logo" aria-hidden="true">Rp</span>
+        <div>
+          <h1>Cashflow</h1>
+          <p class="topbar__sub" id="partnerLabel">Profit sharing</p>
+        </div>
+      </div>
+      <div class="topbar__actions">
+        <button class="icon-btn" id="btnChart" aria-label="Grafik cashflow" title="Grafik cashflow">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+        </button>
+        <button class="icon-btn" id="btnSettings" aria-label="Pengaturan" title="Pengaturan">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button class="icon-btn" id="btnTheme" aria-label="Ganti tema" title="Ganti tema">
+          <svg class="ico-moon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="ico-sun" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <!-- KPI tiles -->
+      <section class="tiles" aria-label="Ringkasan bulan ini">
+        <div class="tile">
+          <p class="tile__label"><span class="tile__dot"></span>Margin kotor bulan ini</p>
+          <p class="tile__value" id="kpiProfit">—</p>
+          <p class="tile__meta" id="kpiProfitMeta">&nbsp;</p>
+        </div>
+        <div class="tile">
+          <p class="tile__label"><span class="tile__dot tile__dot--accent"></span>Share partner bulan ini</p>
+          <p class="tile__value tile__value--accent" id="kpiShare">—</p>
+          <p class="tile__meta" id="kpiShareMeta">&nbsp;</p>
+        </div>
+        <div class="tile">
+          <p class="tile__label"><span class="tile__dot tile__dot--good"></span>Profit bersih bulan ini</p>
+          <p class="tile__value tile__value--good" id="kpiNet">—</p>
+          <p class="tile__meta" id="kpiNetMeta">&nbsp;</p>
+        </div>
+        <div class="tile">
+          <p class="tile__label"><span class="tile__dot tile__dot--good"></span>Sudah dibayar (bulan ini)</p>
+          <p class="tile__value tile__value--good" id="kpiPaid">—</p>
+          <p class="tile__meta" id="kpiPaidMeta">&nbsp;</p>
+        </div>
+        <div class="tile tile--wide">
+          <p class="tile__label"><span class="tile__dot tile__dot--warn"></span>Belum dibayar (bulan ini)</p>
+          <p class="tile__value tile__value--due" id="kpiDue">—</p>
+          <p class="tile__meta" id="kpiDueMeta">&nbsp;</p>
+        </div>
+      </section>
+
+      <!-- Month navigation -->
+      <nav class="month-nav" aria-label="Pilih bulan">
+        <button class="icon-btn" id="btnPrevMonth" aria-label="Bulan sebelumnya">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <h2 class="month-nav__title" id="monthTitle">—</h2>
+        <button class="icon-btn" id="btnNextMonth" aria-label="Bulan berikutnya">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+        </button>
+        <button class="btn btn--ghost btn--today" id="btnToday">Hari ini</button>
+      </nav>
+
+      <!-- Termin cards -->
+      <section class="termins" id="terminCards" aria-label="Termin bulan ini"></section>
+
+      <!-- Add profit form -->
+      <section class="card form-card" aria-label="Tambah margin kotor">
+        <h3 class="card__title">Tambah margin kotor</h3>
+        <form id="entryForm" class="form">
+          <div class="form__row">
+            <label class="field">
+              <span>Tanggal</span>
+              <input type="date" id="entryDate" required>
+            </label>
+            <label class="field field--grow">
+              <span>Jumlah (Rp)</span>
+              <input type="number" id="entryAmount" inputmode="numeric" min="0" step="any" placeholder="0" required>
+            </label>
+          </div>
+          <div class="form__row">
+            <label class="field field--grow">
+              <span>Catatan <em>(opsional)</em></span>
+              <input type="text" id="entryNote" maxlength="80" placeholder="mis. Proyek A, client X…">
+            </label>
+            <button type="submit" class="btn btn--primary">Simpan</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Entries list -->
+      <section class="card" aria-label="Daftar margin bulan ini">
+        <div class="card__head">
+          <h3 class="card__title">Entri bulan ini</h3>
+          <span class="chip" id="entryCount">0 entri</span>
+        </div>
+        <ul class="entries" id="entryList"></ul>
+        <p class="empty" id="entryEmpty">Belum ada margin tercatat bulan ini.</p>
+      </section>
+
+      <!-- Payout history -->
+      <section class="card" aria-label="Riwayat pembayaran">
+        <div class="card__head">
+          <h3 class="card__title">Riwayat termin</h3>
+          <span class="chip" id="payoutTotal">—</span>
+        </div>
+        <ul class="history" id="historyList"></ul>
+        <p class="empty" id="historyEmpty">Belum ada riwayat pembayaran.</p>
+      </section>
+    </main>
+
+    <!-- Chart overlay -->
+    <section class="chart-overlay" id="chartOverlay" hidden aria-label="Grafik cashflow">
+      <div class="chart-sheet">
+        <header class="chart-sheet__head">
+          <h3 class="chart-sheet__title">Grafik cashflow</h3>
+          <div class="chart-sheet__actions">
+            <div class="seg" role="tablist" aria-label="Pilih metrik">
+              <button class="seg__btn is-active" role="tab" data-metric="margin" aria-selected="true">Margin kotor</button>
+              <button class="seg__btn" role="tab" data-metric="share" aria-selected="false">Share partner</button>
+              <button class="seg__btn" role="tab" data-metric="net" aria-selected="false">Profit bersih</button>
+            </div>
+            <button class="icon-btn" id="btnCloseChart" aria-label="Tutup grafik">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Rentang bulan -->
+        <div class="range" role="group" aria-label="Rentang bulan">
+          <div class="range__fields">
+            <label class="range__field">
+              <span>Dari</span>
+              <select id="rangeFrom"></select>
+            </label>
+            <span class="range__sep" aria-hidden="true">–</span>
+            <label class="range__field">
+              <span>Sampai</span>
+              <select id="rangeTo"></select>
+            </label>
+          </div>
+          <div class="range__presets">
+            <button type="button" class="chip-btn" data-preset="6">6 bln</button>
+            <button type="button" class="chip-btn" data-preset="12">12 bln</button>
+            <button type="button" class="chip-btn" data-preset="year">Tahun ini</button>
+            <button type="button" class="chip-btn" data-preset="all">Semua</button>
+          </div>
+        </div>
+
+        <!-- Summary -->
+        <div class="chart-summary">
+          <div class="chart-summary__item">
+            <p class="chart-summary__label"><span class="tile__dot"></span>Total margin kotor</p>
+            <p class="chart-summary__value" id="chartTotalMargin">—</p>
+          </div>
+          <div class="chart-summary__item">
+            <p class="chart-summary__label"><span class="tile__dot tile__dot--accent"></span>Total share partner</p>
+            <p class="chart-summary__value chart-summary__value--accent" id="chartTotalShare">—</p>
+          </div>
+          <div class="chart-summary__item">
+            <p class="chart-summary__label"><span class="tile__dot tile__dot--good"></span>Total profit bersih</p>
+            <p class="chart-summary__value chart-summary__value--good" id="chartTotalNet">—</p>
+          </div>
+          <div class="chart-summary__item">
+            <p class="chart-summary__label"><span class="tile__dot tile__dot--warn"></span>Belum dibayar</p>
+            <p class="chart-summary__value" id="chartTotalDue">—</p>
+          </div>
+        </div>
+
+        <!-- Bar chart: per bulan dalam rentang -->
+        <div class="chart-block">
+          <div class="chart-block__head">
+            <p class="chart-block__title" id="chartRangeTitle">Bulanan</p>
+            <p class="chart-block__note" id="chartUnit"></p>
+          </div>
+          <div class="chart" id="barChart" role="img" aria-label="Grafik batang per bulan"></div>
+          <div class="chart__rows" id="chartMonthRows"></div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p>Data tersimpan lokal di browser ini. <button class="link-btn" id="btnExport">Export JSON</button> · <button class="link-btn" id="btnImport">Import JSON</button> ·<button class="link-btn link-btn--danger" id="btnReset">Reset data</button></p>
+    </footer>
+  </div>
+
+  <!-- Settings dialog -->
+  <dialog id="settingsDialog" class="dialog">
+    <form method="dialog" class="dialog__form">
+      <h3>Pengaturan</h3>
+      <label class="field">
+        <span>Nama partner</span>
+        <input type="text" id="setPartnerName" maxlength="40" placeholder="Partner">
+      </label>
+      <label class="field">
+        <span>Share partner (%)</span>
+        <input type="number" id="setSharePct" min="0" max="100" step="0.5">
+      </label>
+      <label class="field">
+        <span>Pembagi termin — tanggal batas</span>
+        <input type="number" id="setCutoff" min="8" max="23" step="1">
+        <small>Termin 1: tanggal 1 s/d batas · Termin 2: setelahnya s/d akhir bulan. Default 15.</small>
+      </label>
+      <div class="dialog__actions">
+        <button value="cancel" class="btn btn--ghost" id="btnCancelSettings">Batal</button>
+        <button value="ok" class="btn btn--primary" id="btnSaveSettings">Simpan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="importFile" accept="application/json,.json" hidden>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

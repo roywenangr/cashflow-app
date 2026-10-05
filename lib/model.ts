@@ -320,7 +320,16 @@ export function partnerSnapshot(s: State) {
     }
     if (payouts.length) months.push({ ym, label: monthLabel(ym), payouts });
   }
-  return { v: 1, partnerName: s.settings.partnerName, received, outstanding, months };
+  // Money Savings ikut terlihat partner (dananya dari potongan share partner) — hanya baca.
+  const savings = {
+    balance: savingsBalance(s),
+    totalIn: s.subsidies.reduce((sum, x) => sum + x.amount, 0),
+    totalOut: s.savingsUses.reduce((sum, x) => sum + x.amount, 0),
+    txs: savingsLedger(s).map((t) => t.kind === "in"
+      ? { kind: "in" as const, ym: t.ym, amount: t.amount, purpose: t.purpose, termin: t.termin as number, date: null as string | null }
+      : { kind: "out" as const, ym: t.ym, amount: t.amount, purpose: t.purpose, termin: null as number | null, date: t.date }),
+  };
+  return { v: 1, partnerName: s.settings.partnerName, received, outstanding, months, savings };
 }
 
 export type PartnerPayout = {

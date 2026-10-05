@@ -7,10 +7,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, CircleCheck, Clock, FileText, Loader2, LogOut, RefreshCw, Wallet } from "lucide-react";
+import {
+  ArrowDownLeft, ArrowLeft, ArrowRight, ArrowUpRight, CircleCheck, Clock, FileText, Loader2, LogOut, PiggyBank, RefreshCw, Wallet,
+} from "lucide-react";
 import { cloudConfigured } from "@/lib/config";
 import { decryptWithRawKey, derivePartner } from "@/lib/crypto";
-import { dashPeriod, fmtDate, fmtRp, type PartnerPayout, type PartnerView, type Proof } from "@/lib/model";
+import { dashPeriod, fmtDate, fmtRp, monthLabel, type PartnerPayout, type PartnerView, type Proof } from "@/lib/model";
 import { rpc } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -164,6 +166,8 @@ export default function PartnerApp() {
           </div>
         </Rise>
 
+        {d.savings && d.savings.txs.length > 0 && <Rise><PartnerSavings sv={d.savings} /></Rise>}
+
         {d.months.length === 0 && (
           <div className="rounded-2xl border bg-card"><EmptyState icon={<Wallet />} title="Belum ada data payout" /></div>
         )}
@@ -186,6 +190,58 @@ export default function PartnerApp() {
     </div>
   );
   }
+}
+
+// Money Savings versi partner: hanya lihat saldo & riwayat.
+function PartnerSavings({ sv }: { sv: NonNullable<PartnerView["savings"]> }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? sv.txs : sv.txs.slice(0, 5);
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card shadow-xs">
+      <div className="flex flex-wrap items-center gap-4 bg-[linear-gradient(135deg,oklch(0.52_0.12_175),oklch(0.42_0.1_200))] px-5 py-4 text-white">
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 text-sm text-white/80"><PiggyBank className="size-4" /> Money Savings</p>
+          <Money value={sv.balance} className="tnum mt-1 block text-2xl font-semibold tracking-tight" />
+        </div>
+        <div className="flex gap-5 text-sm">
+          <div><p className="flex items-center gap-1 text-xs text-white/75"><ArrowDownLeft className="size-3.5" /> Masuk</p><p className="tnum font-semibold">{fmtRp(sv.totalIn)}</p></div>
+          <div><p className="flex items-center gap-1 text-xs text-white/75"><ArrowUpRight className="size-3.5" /> Dipakai</p><p className="tnum font-semibold">{fmtRp(sv.totalOut)}</p></div>
+        </div>
+      </div>
+      <p className="px-5 pt-3 text-xs text-muted-foreground">Dana terkumpul dari subsidi silang (dipotong dari share kamu) beserta penggunaannya.</p>
+      <ul className="mt-2 border-t">
+        <AnimatePresence initial={false}>
+          {shown.map((t, i) => (
+            <motion.li key={`${t.kind}-${i}-${t.amount}`} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.3, ease }} className="overflow-hidden border-b last:border-b-0">
+              <div className="flex items-center gap-3 px-5 py-3">
+                <span className={cn("grid size-8 shrink-0 place-items-center rounded-full",
+                  t.kind === "in" ? "bg-success/12 text-success-ink" : "bg-s-share/12 text-s-share")}>
+                  {t.kind === "in" ? <ArrowDownLeft className="size-4" /> : <ArrowUpRight className="size-4" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{t.purpose || (t.kind === "in" ? "Subsidi silang" : "Penggunaan")}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {t.kind === "in" ? <>Subsidi silang · Payout {t.termin} <span className="capitalize">{monthLabel(t.ym)}</span></> : <>Dipakai · {fmtDate(t.date!)}</>}
+                  </p>
+                </div>
+                <span className={cn("tnum shrink-0 text-sm font-semibold", t.kind === "in" && "text-success-ink")}>
+                  {t.kind === "in" ? "+" : "−"}{fmtRp(t.amount)}
+                </span>
+              </div>
+            </motion.li>
+          ))}
+        </AnimatePresence>
+      </ul>
+      {sv.txs.length > 5 && (
+        <div className="border-t p-2">
+          <Button variant="ghost" size="lg" className="w-full" onClick={() => setAll(!all)}>
+            {all ? "Tampilkan lebih sedikit" : `Lihat semua (${sv.txs.length})`}
+          </Button>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function PartnerPayoutCard({ p, lookup }: { p: PartnerPayout; lookup: string }) {

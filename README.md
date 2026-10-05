@@ -1,6 +1,8 @@
-# Cashflow — Profit Sharing
+# Cashflowshit App — Profit Sharing
 
-Aplikasi web sederhana untuk mencatat margin kotor, menghitung share partner per payout, dan melacak pembayaran.
+Aplikasi web untuk mencatat margin kotor, menghitung share partner per payout, dan melacak pembayaran.
+
+**Live:** https://cashflowshit.vercel.app · **Versi terbaru:** [v1.0.0](https://github.com/roywenangr/cashflow-app/releases/tag/v1.0.0)
 
 - **Payout 1**: tanggal 1 s/d tanggal batas (default 15) · **Payout 2**: setelahnya s/d akhir bulan
 - Tandai payout sudah dibayar — nominal yang dibayar disimpan, jadi riwayat tidak berubah

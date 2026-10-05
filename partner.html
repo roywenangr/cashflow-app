@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Cashflowshit App — pindah alamat</title>
+  <script>
+    // Aplikasi pindah ke Vercel. #hash (kunci link detail payout) ikut diteruskan.
+    location.replace("https://cashflowshit.vercel.app/partner" + location.search + location.hash);
+  </script>
+  <style>body{font-family:system-ui,sans-serif;background:#0d0d0d;color:#c3c2b7;display:grid;place-items:center;min-height:100vh;margin:0;text-align:center}a{color:#3987e5}</style>
+</head>
+<body>
+  <p>Aplikasi sudah pindah ke <a id="go" href="https://cashflowshit.vercel.app/partner">cashflowshit.vercel.app</a>.</p>
+  <script>document.getElementById("go").href += location.search + location.hash;</script>
+</body>
+</html>

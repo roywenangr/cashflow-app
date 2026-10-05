@@ -33,25 +33,32 @@
     $("shareSub").textContent = "Tidak bisa dibuka";
   }
 
+  const rpc = async (fn, args) => {
+    const res = await fetch(CFG.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/" + fn, {
+      method: "POST",
+      headers: {
+        apikey: CFG.supabaseAnonKey,
+        Authorization: "Bearer " + CFG.supabaseAnonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(args),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+
+  let shareId = null;
+
   async function load() {
     const m = location.hash.slice(1).match(/^([0-9a-f-]{36})\.([A-Za-z0-9_-]+)$/i);
     if (!m) return fail("Link tidak lengkap — pastikan seluruh link dari WhatsApp tersalin.");
     if (!/^https?:\/\//.test(CFG.supabaseUrl || "") || !CFG.supabaseAnonKey) return fail("Aplikasi belum dikonfigurasi.");
     if (!(globalThis.crypto && crypto.subtle)) return fail("Browser ini tidak mendukung dekripsi. Coba buka di Chrome/Safari terbaru.");
 
+    shareId = m[1];
     let data;
     try {
-      const res = await fetch(CFG.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/get_share", {
-        method: "POST",
-        headers: {
-          apikey: CFG.supabaseAnonKey,
-          Authorization: "Bearer " + CFG.supabaseAnonKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ share_id: m[1] }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      data = await res.json();
+      data = await rpc("get_share", { share_id: shareId });
     } catch {
       return fail("Gagal memuat — periksa koneksi internet lalu muat ulang halaman.");
     }
@@ -144,6 +151,44 @@
 
     $("shareStatus").hidden = true;
     $("shareBody").hidden = false;
+    renderProofs((d.payments || []).filter((p) => p.proof));
+  }
+
+  // Bukti transfer: ambil gambar terenkripsi lewat get_share_receipt, dekripsi dengan kunci dari data link.
+  async function renderProofs(items) {
+    if (!items.length) return;
+    $("shareProofCard").hidden = false;
+    const list = $("shareProofs");
+    for (const p of items) {
+      const fig = document.createElement("figure");
+      fig.className = "proof__item proof__item--loading";
+      fig.textContent = "Memuat bukti…";
+      list.append(fig);
+      try {
+        const data = await rpc("get_share_receipt", { share_id: shareId, receipt_id: p.proof.id });
+        if (!data) throw new Error("missing");
+        const blob = JSON.parse(data);
+        const key = await crypto.subtle.importKey("raw", fromB64(p.proof.k), { name: "AES-GCM" }, false, ["decrypt"]);
+        const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(blob.iv) }, key, fromB64(blob.data));
+        const url = URL.createObjectURL(new Blob([pt], { type: blob.type || "image/jpeg" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = "Bukti transfer";
+        a.append(img);
+        const cap = document.createElement("figcaption");
+        cap.textContent = [p.amount !== null ? fmtRp(p.amount) : null, p.at ? fmtDate(p.at) : null].filter(Boolean).join(" · ");
+        fig.className = "proof__item";
+        fig.replaceChildren(a, cap);
+      } catch {
+        fig.remove();
+        $("shareProofError").textContent = "Sebagian bukti transfer tidak bisa dimuat.";
+      }
+    }
+    if (!list.children.length) $("shareProofCard").hidden = $("shareProofError").textContent === "";
   }
 
   load();

@@ -105,6 +105,10 @@
       settings: {
         partnerName: typeof s.partnerName === "string" && s.partnerName.trim() ? s.partnerName.trim().slice(0, 40) : base.settings.partnerName,
         partnerPhone: typeof s.partnerPhone === "string" ? s.partnerPhone.replace(/[^\d+]/g, "").slice(0, 20) : "",
+        // Akses partner: password + turunan (lookup & kunci) — hanya ada di vault terenkripsi.
+        partnerAccess: s.partnerAccess && typeof s.partnerAccess.password === "string"
+          && /^[0-9a-f]{64}$/.test(s.partnerAccess.lookup) && typeof s.partnerAccess.k === "string"
+          ? { password: s.partnerAccess.password, lookup: s.partnerAccess.lookup, k: s.partnerAccess.k } : null,
         sharePct: defaultPct, // default untuk entri baru
         cutoff: Number.isFinite(cutoff) && s.cutoff !== "" && s.cutoff !== null ? clamp(Math.round(cutoff), 8, 23) : base.settings.cutoff,
       },
@@ -188,6 +192,20 @@
     const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
     return { k: toB64(raw), data: JSON.stringify({ v: 1, type, iv: toB64(iv), data: toB64(ct) }) };
+  }
+
+  // Password partner -> lookup (untuk menemukan baris di server) + kunci AES. Harus sama persis dengan partner.js.
+  async function derivePartner(password) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+    const bits = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: "PBKDF2", salt: new TextEncoder().encode("cashflow-partner-v1"), iterations: KDF_ITER, hash: "SHA-256" },
+      base, 512));
+    return { lookup: toHex(bits.slice(0, 32)), k: toB64(bits.slice(32)) };
+  }
+
+  async function encryptWithRawKey(k, json) {
+    const key = await crypto.subtle.importKey("raw", fromB64(k), { name: "AES-GCM" }, false, ["encrypt"]);
+    return encryptJson(key, json);
   }
 
   async function decryptReceipt(k, dataStr) {
@@ -360,9 +378,14 @@
       return rows && rows[0] ? rows[0].data : null;
     },
     deleteReceipts: (ids) => authed("DELETE", `/rest/v1/receipts?id=in.(${ids.map(encodeURIComponent).join(",")})`),
-    putShare: (id, data) => authed("POST", "/rest/v1/shares", { body: { id, data } }),
+    putShare: (id, data, receiptIds) => authed("POST", "/rest/v1/shares", { body: { id, data, receipt_ids: receiptIds } }),
     deleteShares: (ids) => authed("DELETE", `/rest/v1/shares?id=in.(${ids.map(encodeURIComponent).join(",")})`),
     deleteAllShares: () => authed("DELETE", `/rest/v1/shares?user_id=eq.${encodeURIComponent(session.userId)}`),
+    // on_conflict=user_id: satu baris per pemilik; ganti password partner = ganti lookup di baris yang sama
+    putPartnerView: (body) => authed("POST", "/rest/v1/partner_views?on_conflict=user_id", {
+      body, headers: { Prefer: "resolution=merge-duplicates" },
+    }),
+    deletePartnerView: () => authed("DELETE", `/rest/v1/partner_views?user_id=eq.${encodeURIComponent(session.userId)}`),
     deleteAllReceipts: () => authed("DELETE", `/rest/v1/receipts?user_id=eq.${encodeURIComponent(session.userId)}`),
     updatePassword: (secret) => authed("PUT", "/auth/v1/user", { body: { password: secret } }),
   };
@@ -449,6 +472,7 @@
         break;
       }
       setSync("synced");
+      schedulePartnerPublish(); // sesi pasti ada di sini — kirim data partner yang tertunda
     } catch (e) {
       if (isNetworkError(e) || !navigator.onLine) setSync("offline");
       else setSync("error", e.status === 401 ? "sesi berakhir, keluar lalu masuk lagi" : e.message);
@@ -885,6 +909,7 @@
     renderSubsidies();
     renderHistory();
     save();
+    schedulePartnerPublish();
   }
 
   // ---------- Chart overlay ----------
@@ -1244,6 +1269,75 @@
     }
   });
 
+  // ---------- Data untuk login partner ----------
+  // Hanya angka milik partner: share, subsidi, transfer, status & bukti. Tanpa margin kotor, invoice, profit bersih.
+
+  function partnerSnapshot() {
+    const yms = new Set([
+      ...state.entries.map((e) => e.date.slice(0, 7)),
+      ...state.subsidies.map((x) => x.ym),
+      ...Object.keys(state.payouts).map((k) => k.slice(0, 7)),
+    ]);
+    const months = [];
+    let received = 0, outstanding = 0;
+    for (const ym of [...yms].sort().reverse()) {
+      const payouts = [];
+      for (const t of [1, 2]) {
+        const tt = terminTotals(ym, t);
+        const p = state.payouts[terminKey(ym, t)];
+        if (tt.share === 0 && !p && tt.subsidy === 0) continue;
+        received += tt.paidAmount;
+        outstanding += tt.remaining;
+        payouts.push({
+          t, period: terminPeriod(ym, t),
+          share: tt.share, subsidy: tt.subsidy, payable: tt.payable,
+          paid: tt.paid, settled: tt.settled, paidAt: tt.paidAt, paidAmount: tt.paidAmount, remaining: tt.remaining,
+          subsidies: terminSubsidies(ym, t).map((x) => ({ amount: x.amount, purpose: x.purpose })),
+          proofs: p && p.proofs ? p.proofs.map((x) => ({ id: x.id, k: x.k, at: x.at, amount: x.amount })) : [],
+        });
+      }
+      if (payouts.length) months.push({ ym, label: monthLabel(ym), payouts });
+    }
+    return { v: 1, partnerName: state.settings.partnerName, received, outstanding, months };
+  }
+
+  let partnerPublished = null; // lookup + json terakhir yang sudah terkirim
+  let partnerTimer = null;
+  function schedulePartnerPublish() {
+    if (!state.settings.partnerAccess) return;
+    clearTimeout(partnerTimer);
+    partnerTimer = setTimeout(() => publishPartnerView().catch(() => {}), 1500);
+  }
+
+  async function publishPartnerView() {
+    const acc = state.settings.partnerAccess;
+    if (!acc || !session || !vault.key) return;
+    const snap = partnerSnapshot();
+    const json = JSON.stringify(snap);
+    const sig = acc.lookup + json;
+    if (sig === partnerPublished) return; // tidak berubah sejak kiriman terakhir
+    const data = await encryptWithRawKey(acc.k, json);
+    const receiptIds = snap.months.flatMap((m) => m.payouts.flatMap((p) => p.proofs.map((x) => x.id)));
+    await remote.putPartnerView({ lookup: acc.lookup, data, receipt_ids: receiptIds, updated_at: new Date().toISOString() });
+    partnerPublished = sig;
+    renderPartnerAccess();
+  }
+
+  function renderPartnerAccess() {
+    const acc = state.settings.partnerAccess;
+    $("partnerAccessStatus").textContent = acc
+      ? (partnerPublished && partnerPublished.startsWith(acc.lookup) ? "Aktif — data partner sudah tersinkron" : "Aktif — menunggu sinkron")
+      : "Belum aktif";
+    $("btnDisablePartner").hidden = !acc;
+    $("btnSavePartnerPw").textContent = acc ? "Ganti password partner" : "Aktifkan akses partner";
+  }
+
+  function randomPassword(len = 14) {
+    const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // tanpa karakter mirip (0/O, 1/l/I)
+    const rnd = crypto.getRandomValues(new Uint32Array(len));
+    return Array.from(rnd, (n) => chars[n % chars.length]).join("");
+  }
+
   // ---------- Link detail payout untuk partner (WhatsApp) ----------
 
   const b64url = (b64) => b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -1285,7 +1379,8 @@
       period: terminPeriod(ym, t),
       paidAt: p.paidAt,
       paidAmount: p.amount,
-      payments: (p.proofs || []).map((x) => ({ at: x.at, amount: x.amount })),
+      // id + kunci bukti transfer, supaya partner bisa melihat gambarnya (diizinkan lewat receipt_ids)
+      payments: (p.proofs || []).map((x) => ({ at: x.at, amount: x.amount, proof: { id: x.id, k: x.k } })),
       profit: totals.profit,
       share: totals.share,
       subsidy: totals.subsidy,
@@ -1305,7 +1400,8 @@
     const json = JSON.stringify(shareSnapshot(ym, t));
     const { k, data } = await encryptReceipt(new TextEncoder().encode(json), "application/json");
     const id = newId();
-    await remote.putShare(id, data);
+    const receiptIds = (state.payouts[key].proofs || []).map((x) => x.id);
+    await remote.putShare(id, data, receiptIds);
     const p = state.payouts[key];
     if (!p) return; // keburu dibatalkan
     const old = p.share;
@@ -1548,6 +1644,9 @@
   $("btnSettings").addEventListener("click", () => {
     $("setPartnerName").value = state.settings.partnerName;
     $("setPartnerPhone").value = state.settings.partnerPhone;
+    $("setPartnerPw").value = state.settings.partnerAccess ? state.settings.partnerAccess.password : "";
+    $("partnerAccessError").textContent = "";
+    renderPartnerAccess();
     $("setSharePct").value = state.settings.sharePct;
     $("setCutoff").value = state.settings.cutoff;
     dlg.showModal();
@@ -1564,11 +1663,55 @@
     const pct = pctIn !== "" && Number.isFinite(Number(pctIn)) ? clamp(Number(pctIn), 0, 100) : state.settings.sharePct;
     const cutoff = cutoffIn !== "" && Number.isFinite(Number(cutoffIn)) ? clamp(Math.round(Number(cutoffIn)), 8, 23) : state.settings.cutoff;
     const phone = $("setPartnerPhone").value.replace(/[^\d+]/g, "").slice(0, 20);
-    state.settings = { partnerName: name, partnerPhone: phone, sharePct: pct, cutoff };
+    state.settings = { ...state.settings, partnerName: name, partnerPhone: phone, sharePct: pct, cutoff };
     els.entryPct.value = pct;
     render();
     dlg.close();
     toast("Pengaturan disimpan");
+  });
+
+  $("btnGenPartnerPw").addEventListener("click", () => { $("setPartnerPw").value = randomPassword(); });
+
+  $("btnSavePartnerPw").addEventListener("click", async () => {
+    const pw = $("setPartnerPw").value.trim();
+    const err = $("partnerAccessError");
+    err.textContent = "";
+    if (pw.length < 10) { err.textContent = "Password partner minimal 10 karakter — tekan \"Acak\" untuk membuat yang kuat."; return; }
+    if (!session) { err.textContent = "Butuh koneksi internet untuk mengaktifkan akses partner."; return; }
+    const btn = $("btnSavePartnerPw");
+    setBusy(btn, true);
+    try {
+      const { lookup, k } = await derivePartner(pw);
+      state.settings.partnerAccess = { password: pw, lookup, k };
+      partnerPublished = null;
+      await publishPartnerView();
+      setBusy(btn, false);
+      render();
+      renderPartnerAccess();
+      toast("Akses partner aktif — bagikan password ini ke partner");
+    } catch (e) {
+      setBusy(btn, false);
+      err.textContent = isNetworkError(e) ? "Tidak bisa terhubung ke server — coba lagi."
+        : /duplicate|unique/i.test(e.message) ? "Password ini tidak bisa dipakai — coba password lain."
+        : `Gagal: ${e.message}`;
+      renderPartnerAccess();
+    }
+  });
+
+  $("btnDisablePartner").addEventListener("click", async () => {
+    if (!confirm("Matikan akses partner? Partner tidak akan bisa masuk lagi sampai kamu membuat password baru.")) return;
+    const err = $("partnerAccessError");
+    try {
+      if (session) await remote.deletePartnerView();
+      state.settings.partnerAccess = null;
+      partnerPublished = null;
+      $("setPartnerPw").value = "";
+      render();
+      renderPartnerAccess();
+      toast("Akses partner dimatikan");
+    } catch (e) {
+      err.textContent = isNetworkError(e) ? "Butuh koneksi internet untuk mematikan akses." : `Gagal: ${e.message}`;
+    }
   });
 
   // ---------- Chart overlay events ----------
@@ -1687,12 +1830,14 @@
   $("btnReset").addEventListener("click", () => {
     if (confirm("Hapus SEMUA data (invoice, riwayat payout, pengaturan) di SEMUA perangkat yang memakai akun ini? Tindakan ini tidak bisa dibatalkan.")) {
       state = defaults();
+      partnerPublished = null;
       viewMonth = today().slice(0, 7);
       render();
       if (session) {
         // bukti transfer & link partner di cloud ikut dihapus
         remote.deleteAllReceipts().catch(() => {});
         remote.deleteAllShares().catch(() => {});
+        remote.deletePartnerView().catch(() => {});
       }
       toast("Semua data direset");
     }

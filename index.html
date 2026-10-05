@@ -38,6 +38,7 @@
         <button type="button" class="link-btn" id="lockSwitch">Daftar</button>
       </p>
       <p class="lock__note" id="lockNote"></p>
+      <a class="btn btn--ghost btn--block lock__partner" href="partner.html">Masuk sebagai partner</a>
     </form>
   </section>
 
@@ -297,6 +298,20 @@
         <input type="number" id="setCutoff" min="8" max="23" step="1">
         <small>Payout 1: tanggal 1 s/d batas · Payout 2: setelahnya s/d akhir bulan. Default 15.</small>
       </label>
+      <div class="field">
+        <span>Akses partner</span>
+        <p class="account" id="partnerAccessStatus">—</p>
+        <span class="pw">
+          <input type="text" id="setPartnerPw" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Password untuk partner">
+          <button type="button" class="pw__toggle" id="btnGenPartnerPw">Acak</button>
+        </span>
+        <small>Partner masuk lewat "Masuk sebagai partner" dengan password ini dan hanya melihat share, subsidi, status bayar &amp; bukti transfer — tanpa margin kotor atau invoice. Minimal 10 karakter.</small>
+        <div class="form__row">
+          <button type="button" class="btn btn--ghost" id="btnSavePartnerPw">Simpan password partner</button>
+          <button type="button" class="btn btn--ghost link-btn--danger" id="btnDisablePartner" hidden>Matikan akses</button>
+        </div>
+        <p class="form-error" id="partnerAccessError" role="alert"></p>
+      </div>
       <div class="field">
         <span>Akun</span>
         <p class="account" id="accountEmail">—</p>

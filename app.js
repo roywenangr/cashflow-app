@@ -18,9 +18,10 @@
   // ---------- State ----------
 
   const defaults = () => ({
-    settings: { partnerName: "Partner", sharePct: 10, cutoff: 15 },
-    entries: [],   // { id, date: "YYYY-MM-DD", amount, note }
-    payouts: {},   // "YYYY-MM-1" | "YYYY-MM-2" -> { paid: true, paidAt: "YYYY-MM-DD", amount }
+    settings: { partnerName: "Partner", partnerPhone: "", sharePct: 10, cutoff: 15 },
+    entries: [],   // { id, date: "YYYY-MM-DD", amount, note, sharePct }
+    payouts: {},   // "YYYY-MM-1" | "YYYY-MM-2" -> { paid: true, paidAt: "YYYY-MM-DD", amount, proofs: [{ id, k, at, amount }], share?: { id, k } }
+    subsidies: [], // { id, ym: "YYYY-MM", termin: 1|2, amount, purpose } — dipotong dari share partner
     theme: prefersLight() ? "light" : "dark",
   });
 
@@ -54,6 +55,8 @@
     const s = data.settings || {};
     const pct = Number(s.sharePct);
     const cutoff = Number(s.cutoff);
+    const defaultPct = Number.isFinite(pct) && s.sharePct !== "" && s.sharePct !== null ? clamp(pct, 0, 100) : base.settings.sharePct;
+    const validPct = (v) => v !== "" && v !== null && v !== undefined && Number.isFinite(Number(v));
 
     const entries = (Array.isArray(data.entries) ? data.entries : [])
       .filter((e) => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && Number(e.amount) > 0)
@@ -62,6 +65,9 @@
         date: e.date,
         amount: Math.round(Number(e.amount)),
         note: typeof e.note === "string" ? e.note.slice(0, 80) : "",
+        // Data lama belum punya % per entri — dibekukan ke default saat ini supaya
+        // mengganti default nanti tidak mengubah share entri lama.
+        sharePct: validPct(e.sharePct) ? clamp(Number(e.sharePct), 0, 100) : defaultPct,
       }));
 
     const payouts = {};
@@ -72,18 +78,39 @@
           paid: true,
           paidAt: /^\d{4}-\d{2}-\d{2}$/.test(p.paidAt) ? p.paidAt : key.slice(0, 7) + "-01",
           ...(Number.isFinite(Number(p.amount)) && p.amount !== null && p.amount !== "" ? { amount: Math.round(Number(p.amount)) } : {}),
+          proofs: (Array.isArray(p.proofs) ? p.proofs : [])
+            .filter((x) => x && typeof x.id === "string" && typeof x.k === "string")
+            .map((x) => ({
+              id: x.id,
+              k: x.k,
+              at: /^\d{4}-\d{2}-\d{2}$/.test(x.at) ? x.at : null,
+              amount: Number.isFinite(Number(x.amount)) ? Math.round(Number(x.amount)) : null,
+            })),
+          ...(p.share && typeof p.share.id === "string" && typeof p.share.k === "string" ? { share: { id: p.share.id, k: p.share.k } } : {}),
         };
       }
     }
 
+    const subsidies = (Array.isArray(data.subsidies) ? data.subsidies : [])
+      .filter((x) => x && /^\d{4}-\d{2}$/.test(x.ym) && (x.termin === 1 || x.termin === 2) && Number(x.amount) > 0)
+      .map((x) => ({
+        id: x.id ? String(x.id) : newId(),
+        ym: x.ym,
+        termin: x.termin,
+        amount: Math.round(Number(x.amount)),
+        purpose: typeof x.purpose === "string" ? x.purpose.slice(0, 80) : "",
+      }));
+
     return {
       settings: {
         partnerName: typeof s.partnerName === "string" && s.partnerName.trim() ? s.partnerName.trim().slice(0, 40) : base.settings.partnerName,
-        sharePct: Number.isFinite(pct) && s.sharePct !== "" && s.sharePct !== null ? clamp(pct, 0, 100) : base.settings.sharePct,
+        partnerPhone: typeof s.partnerPhone === "string" ? s.partnerPhone.replace(/[^\d+]/g, "").slice(0, 20) : "",
+        sharePct: defaultPct, // default untuk entri baru
         cutoff: Number.isFinite(cutoff) && s.cutoff !== "" && s.cutoff !== null ? clamp(Math.round(cutoff), 8, 23) : base.settings.cutoff,
       },
       entries,
       payouts,
+      subsidies,
       theme: data.theme === "light" ? "light" : data.theme === "dark" ? "dark" : base.theme,
     };
   }
@@ -93,7 +120,7 @@
   function backfillPayoutAmounts() {
     for (const [key, p] of Object.entries(state.payouts)) {
       if (p.amount === undefined) {
-        p.amount = shareOf(key.slice(0, 7), Number(key.slice(8)));
+        p.amount = payableOf(key.slice(0, 7), Number(key.slice(8)));
       }
     }
   }
@@ -151,6 +178,23 @@
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(json));
     return JSON.stringify({ v: 2, iv: toB64(iv), data: toB64(ct) });
+  }
+
+  // Bukti transfer: tiap gambar punya kunci acak sendiri. Kuncinya disimpan di vault (ikut terenkripsi
+  // dengan kunci password), jadi ganti password tidak perlu mengenkripsi ulang gambar.
+  async function encryptReceipt(bytes, type) {
+    const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes);
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
+    return { k: toB64(raw), data: JSON.stringify({ v: 1, type, iv: toB64(iv), data: toB64(ct) }) };
+  }
+
+  async function decryptReceipt(k, dataStr) {
+    const blob = JSON.parse(dataStr);
+    const key = await crypto.subtle.importKey("raw", fromB64(k), { name: "AES-GCM" }, false, ["decrypt"]);
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(blob.iv) }, key, fromB64(blob.data));
+    return new Blob([pt], { type: blob.type || "image/jpeg" });
   }
 
   async function decryptBlob(key, blobStr) {
@@ -310,6 +354,16 @@
         });
       return rows && rows[0] ? rows[0].version : null;
     },
+    putReceipt: (id, data) => authed("POST", "/rest/v1/receipts", { body: { id, data } }),
+    async getReceipt(id) {
+      const rows = await authed("GET", `/rest/v1/receipts?id=eq.${encodeURIComponent(id)}&select=data`);
+      return rows && rows[0] ? rows[0].data : null;
+    },
+    deleteReceipts: (ids) => authed("DELETE", `/rest/v1/receipts?id=in.(${ids.map(encodeURIComponent).join(",")})`),
+    putShare: (id, data) => authed("POST", "/rest/v1/shares", { body: { id, data } }),
+    deleteShares: (ids) => authed("DELETE", `/rest/v1/shares?id=in.(${ids.map(encodeURIComponent).join(",")})`),
+    deleteAllShares: () => authed("DELETE", `/rest/v1/shares?user_id=eq.${encodeURIComponent(session.userId)}`),
+    deleteAllReceipts: () => authed("DELETE", `/rest/v1/receipts?user_id=eq.${encodeURIComponent(session.userId)}`),
     updatePassword: (secret) => authed("PUT", "/auth/v1/user", { body: { password: secret } }),
   };
 
@@ -341,6 +395,7 @@
   function applyRemote(data, row) {
     state = normalize(data);
     backfillPayoutAmounts();
+    els.entryPct.value = state.settings.sharePct;
     lastSavedJson = JSON.stringify(state);
     cache.blob = row.data;
     cache.version = row.version;
@@ -407,7 +462,7 @@
   function describe(data, at) {
     const n = Array.isArray(data.entries) ? data.entries.length : 0;
     const when = at ? new Date(at).toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
-    return `${n} entri${when ? " · diubah " + when : ""}`;
+    return `${n} invoice${when ? " · diubah " + when : ""}`;
   }
 
   function resolveConflict(remoteData, row) {
@@ -501,44 +556,78 @@
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }
 
+  const terminEntries = (ym, t) => monthEntries(ym).filter((e) => terminOf(e.date) === t);
+
   function terminProfit(ym, t) {
-    return monthEntries(ym)
-      .filter((e) => terminOf(e.date) === t)
-      .reduce((s, e) => s + e.amount, 0);
+    return terminEntries(ym, t).reduce((s, e) => s + e.amount, 0);
   }
 
-  // Share dibulatkan per termin (Rupiah tanpa sen); total bulan = jumlah dua termin.
+  // Tiap entri punya % sendiri; share dibulatkan per termin (Rupiah tanpa sen),
+  // total bulan = jumlah dua termin.
   function shareOf(ym, t) {
-    return Math.round(terminProfit(ym, t) * (state.settings.sharePct / 100));
+    return Math.round(terminEntries(ym, t).reduce((s, e) => s + e.amount * (e.sharePct / 100), 0));
+  }
+
+  const terminSubsidies = (ym, t) => state.subsidies.filter((x) => x.ym === ym && x.termin === t);
+  const subsidyOf = (ym, t) => terminSubsidies(ym, t).reduce((s, x) => s + x.amount, 0);
+
+  // Yang perlu ditransfer ke partner = share − subsidi silang (tidak bisa negatif).
+  const payableOf = (ym, t) => Math.max(0, shareOf(ym, t) - subsidyOf(ym, t));
+
+  const fmtPct = (n) => `${n.toLocaleString("id-ID", { maximumFractionDigits: 2 })}%`;
+
+  // "10%" kalau semua entri sama, "campuran" kalau berbeda, default kalau belum ada entri.
+  function pctLabel(entries) {
+    const pcts = [...new Set(entries.map((e) => e.sharePct))];
+    if (pcts.length === 0) return fmtPct(state.settings.sharePct);
+    return pcts.length === 1 ? fmtPct(pcts[0]) : "campuran";
   }
 
   function terminTotals(ym, t) {
     const profit = terminProfit(ym, t);
-    const share = Math.round(profit * (state.settings.sharePct / 100));
+    const share = shareOf(ym, t);
+    const subsidy = subsidyOf(ym, t);
+    const payable = Math.max(0, share - subsidy);
     const payout = state.payouts[terminKey(ym, t)];
     const paidAmount = payout ? payout.amount : 0;
     return {
       profit,
       share,
+      subsidy,
+      payable,                                         // share setelah dipotong subsidi silang
       paid: !!payout,                                  // pernah ada pembayaran
-      settled: !!payout && paidAmount >= share,        // lunas sesuai share saat ini
+      settled: (!!payout || (share > 0 && payable === 0)) && paidAmount >= payable, // lunas (atau tertutup subsidi)
       paidAt: payout ? payout.paidAt : null,
       paidAmount,
-      remaining: Math.max(0, share - paidAmount),      // kurang bayar (mis. entri ditambah setelah dibayar)
-      overpaid: Math.max(0, paidAmount - share),       // lebih bayar (mis. entri dihapus setelah dibayar)
+      proofCount: payout && payout.proofs ? payout.proofs.length : 0,
+      remaining: Math.max(0, payable - paidAmount),    // kurang bayar (mis. entri ditambah setelah dibayar)
+      overpaid: Math.max(0, paidAmount - payable),     // lebih bayar (mis. entri dihapus setelah dibayar)
     };
   }
 
-  function markPaid(ym, t, paid) {
+  // proof: { id, k } bukti transfer yang sudah diupload — wajib saat menandai dibayar.
+  function markPaid(ym, t, paid, proof) {
     const key = terminKey(ym, t);
     if (paid) {
+      const prev = state.payouts[key];
+      const amount = payableOf(ym, t);
+      const proofs = prev && prev.proofs ? prev.proofs : [];
       // Simpan nominal yang benar-benar dibayar agar riwayat tidak ikut berubah.
-      state.payouts[key] = { paid: true, paidAt: today(), amount: shareOf(ym, t) };
+      state.payouts[key] = {
+        paid: true, paidAt: today(), amount,
+        proofs: [...proofs, { ...proof, at: today(), amount: amount - (prev ? prev.amount : 0) }],
+      };
     } else {
+      const prev = state.payouts[key];
       delete state.payouts[key];
+      // Hapus gambar & link partner di cloud juga (kalau gagal/offline, tinggal jadi baris yatim yang tidak terbaca).
+      if (prev && prev.proofs && prev.proofs.length && session) {
+        remote.deleteReceipts(prev.proofs.map((x) => x.id)).catch(() => {});
+      }
+      if (prev && prev.share && session) remote.deleteShares([prev.share.id]).catch(() => {});
     }
     render();
-    toast(paid ? `Termin ${t} ditandai sudah dibayar — ${monthLabel(ym)}` : "Tanda dibayar dibatalkan");
+    toast(paid ? `Payout ${t} ditandai sudah dibayar — ${monthLabel(ym)}` : "Tanda dibayar dibatalkan");
   }
 
   // ---------- DOM ----------
@@ -554,14 +643,17 @@
     kpiDue: $("kpiDue"), kpiDueMeta: $("kpiDueMeta"),
     monthTitle: $("monthTitle"),
     terminCards: $("terminCards"),
-    entryForm: $("entryForm"), entryDate: $("entryDate"), entryAmount: $("entryAmount"), entryNote: $("entryNote"),
+    entryForm: $("entryForm"), entryDate: $("entryDate"), entryAmount: $("entryAmount"), entryNote: $("entryNote"), entryPct: $("entryPct"),
     entryList: $("entryList"), entryEmpty: $("entryEmpty"), entryCount: $("entryCount"),
+    subsidyForm: $("subsidyForm"), subsidyTermin: $("subsidyTermin"), subsidyAmount: $("subsidyAmount"),
+    subsidyPurpose: $("subsidyPurpose"), subsidyList: $("subsidyList"), subsidyTotal: $("subsidyTotal"),
     historyList: $("historyList"), historyEmpty: $("historyEmpty"), payoutTotal: $("payoutTotal"),
     toast: $("toast"),
     chartOverlay: $("chartOverlay"),
     chartTotalMargin: $("chartTotalMargin"), chartTotalShare: $("chartTotalShare"),
     chartTotalNet: $("chartTotalNet"), chartTotalDue: $("chartTotalDue"),
-    barChart: $("barChart"), chartMonthRows: $("chartMonthRows"), chartUnit: $("chartUnit"),
+    lineChart: $("lineChart"), lineSvg: $("lineSvg"), chartTip: $("chartTip"), chartLegend: $("chartLegend"),
+    chartMonthRows: $("chartMonthRows"),
     chartRangeTitle: $("chartRangeTitle"),
   };
 
@@ -572,6 +664,7 @@
     const t2 = terminTotals(viewMonth, 2);
     const profit = t1.profit + t2.profit;
     const share = t1.share + t2.share;
+    const subsidy = t1.subsidy + t2.subsidy;
     const paid = t1.paidAmount + t2.paidAmount;
     const due = t1.remaining + t2.remaining;
     const net = profit - share; // profit bersih = margin kotor − share partner
@@ -585,17 +678,21 @@
     els.kpiDue.textContent = fmtRp(due);
 
     const scope = isThisMonth ? "Bulan ini" : monthLabel(viewMonth);
-    els.kpiProfitMeta.textContent = `${entries.length} entri · ${scope}`;
-    els.kpiShareMeta.textContent = `${state.settings.sharePct}% dari margin kotor`;
+    els.kpiProfitMeta.textContent = `${entries.length} Invoice · ${scope}`;
+    els.kpiShareMeta.textContent = pctLabel(entries) === "campuran"
+      ? `Rata-rata ${fmtPct(profit ? Math.round((share / profit) * 1000) / 10 : 0)}`
+      : `${pctLabel(entries)} dari margin kotor`;
+    if (subsidy > 0) els.kpiShareMeta.textContent += ` · subsidi silang −${fmtRp(subsidy)}`;
     els.kpiNetMeta.textContent = "Margin kotor − share partner";
-    els.kpiPaidMeta.textContent = paid > 0 ? `${settledCount} dari 2 termin lunas` : "Belum ada termin lunas";
-    els.kpiDueMeta.textContent = due > 0 ? `${dueCount} termin menunggu` : share > 0 ? "Semua lunas" : "Belum ada tagihan";
+    els.kpiPaidMeta.textContent = paid > 0 ? `${settledCount} dari 2 payout lunas` : "Belum ada payout lunas";
+    els.kpiDueMeta.textContent = due > 0 ? `${dueCount} payout menunggu` : share > 0 ? "Semua lunas" : "Belum ada tagihan";
 
     clampDateToMonth();
   }
 
   function terminCard(ym, t, totals) {
     const empty = totals.profit === 0;
+    const covered = !empty && !totals.paid && totals.share > 0 && totals.payable === 0; // share habis untuk subsidi
     const partial = totals.paid && totals.remaining > 0;
     const card = document.createElement("article");
     card.className = "termin" +
@@ -611,7 +708,9 @@
 
     const paidNote = totals.paid
       ? `<p class="termin__note">Dibayar ${fmtRp(totals.paidAmount)} · ${fmtDate(totals.paidAt)}${
-          totals.overpaid > 0 ? ` · lebih bayar ${fmtRp(totals.overpaid)}` : ""}</p>`
+          totals.overpaid > 0 ? ` · lebih bayar ${fmtRp(totals.overpaid)}` : ""}${
+          totals.proofCount ? ` · <button type="button" class="link-btn" data-proof="${terminKey(ym, t)}">Lihat bukti${totals.proofCount > 1 ? ` (${totals.proofCount})` : ""}</button>` : ""}${
+          state.payouts[terminKey(ym, t)].share ? ` · <a class="link-btn" href="${escapeHtml(waUrl(terminKey(ym, t)))}" target="_blank" rel="noopener">Kirim WA</a>` : ""}</p>`
       : "";
 
     const footBtn = partial
@@ -621,27 +720,34 @@
       : totals.paid
         ? `<button class="btn btn--ghost btn--block" data-unmark="${t}">Batalkan tanda lunas</button>
            ${paidNote}`
+        : covered
+          ? `<p class="termin__note">Share tertutup subsidi silang — tidak ada yang perlu ditransfer</p>`
         : empty
-          ? `<p class="termin__note">Belum ada margin di periode ini</p>`
+          ? `<p class="termin__note">Belum ada invoice di periode ini</p>`
           : `<button class="btn btn--primary btn--block" data-mark="${t}">Tandai sudah dibayar</button>`;
 
     card.innerHTML = `
       <div class="termin__head">
         <div>
-          <p class="termin__name" style="margin:0">Termin ${t}</p>
+          <p class="termin__name" style="margin:0">Payout ${t}</p>
           <p class="termin__period" style="margin:2px 0 0">${terminPeriod(ym, t)}</p>
         </div>
         ${badge}
       </div>
       <div class="termin__figures">
         <div class="figure">
-          <span class="figure__label">Margin kotor periode</span>
+          <span class="figure__label">Margin Kotor (Tgl ${terminPeriod(ym, t).replace(" – ", " - ")})</span>
           <span class="figure__value">${fmtRp(totals.profit)}</span>
         </div>
         <div class="figure">
-          <span class="figure__label">Share partner (${state.settings.sharePct}%)</span>
+          <span class="figure__label">Share partner (${pctLabel(terminEntries(ym, t))})</span>
           <span class="figure__value">${fmtRp(totals.share)}</span>
         </div>
+        ${totals.subsidy > 0 ? `
+        <div class="figure">
+          <span class="figure__label">Subsidi silang</span>
+          <span class="figure__value figure__value--neg">−${fmtRp(totals.subsidy)}</span>
+        </div>` : ""}
         <div class="figure">
           <span class="figure__label">Profit bersih kamu</span>
           <span class="figure__value">${fmtRp(totals.profit - totals.share)}</span>
@@ -650,10 +756,10 @@
       <div class="termin__share">
         <p class="termin__share-label">
           <span class="tile__dot ${totals.paid ? "tile__dot--good" : "tile__dot--warn"}"></span>
-          ${partial ? "Sisa perlu ditransfer" : totals.paid ? "Sudah ditransfer" : "Perlu ditransfer"}
+          ${partial ? "Sisa perlu ditransfer" : totals.paid ? "Sudah ditransfer" : covered ? "Tertutup subsidi silang" : "Perlu ditransfer"}
         </p>
         <p class="termin__share-value">${
-          partial ? fmtRp(totals.remaining) : totals.paid ? fmtRp(totals.paidAmount) : empty ? "—" : fmtRp(totals.share)}</p>
+          partial ? fmtRp(totals.remaining) : totals.paid ? fmtRp(totals.paidAmount) : empty ? "—" : fmtRp(totals.payable)}</p>
       </div>
       <div class="termin__foot">
         ${footBtn}
@@ -671,7 +777,7 @@
 
   function renderEntries() {
     const entries = monthEntries(viewMonth);
-    els.entryCount.textContent = `${entries.length} entri`;
+    els.entryCount.textContent = `${entries.length} Invoice`;
     els.entryEmpty.hidden = entries.length > 0;
 
     const frag = document.createDocumentFragment();
@@ -683,10 +789,11 @@
         <div class="entry__body">
           <span class="entry__amount">${fmtRp(e.amount)}</span>
           ${e.note ? `<span class="entry__note"></span>` : ""}
+          <span class="entry__share">Share ${fmtPct(e.sharePct)} · ${fmtRp(Math.round(e.amount * (e.sharePct / 100)))}</span>
         </div>
         <div class="entry__side">
-          <span class="entry__tag">Termin ${terminOf(e.date)}</span>
-          <button class="del-btn" data-del="${e.id}" aria-label="Hapus entri">
+          <span class="entry__tag">Payout ${terminOf(e.date)}</span>
+          <button class="del-btn" data-del="${e.id}" aria-label="Hapus invoice">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
           </button>
         </div>
@@ -696,6 +803,35 @@
       frag.appendChild(li);
     }
     els.entryList.replaceChildren(frag);
+  }
+
+  function renderSubsidies() {
+    const list = state.subsidies
+      .filter((x) => x.ym === viewMonth)
+      .sort((a, b) => a.termin - b.termin);
+    const total = list.reduce((s, x) => s + x.amount, 0);
+    els.subsidyTotal.textContent = list.length ? `${fmtRp(total)} bulan ini` : "—";
+
+    const frag = document.createDocumentFragment();
+    for (const x of list) {
+      const li = document.createElement("li");
+      li.className = "entry";
+      li.innerHTML = `
+        <div class="entry__body">
+          <span class="entry__amount">−${fmtRp(x.amount)}</span>
+          <span class="entry__note"></span>
+        </div>
+        <div class="entry__side">
+          <span class="entry__tag">Payout ${x.termin}</span>
+          <button class="del-btn" data-del-subsidy="${x.id}" aria-label="Hapus subsidi silang">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+          </button>
+        </div>
+      `;
+      li.querySelector(".entry__note").textContent = x.purpose; // textContent — aman dari injeksi
+      frag.appendChild(li);
+    }
+    els.subsidyList.replaceChildren(frag);
   }
 
   function renderHistory() {
@@ -715,8 +851,9 @@
       li.innerHTML = `
         <span class="badge badge--paid"><span class="badge__dot"></span>Paid</span>
         <div class="history__body">
-          <p class="history__title" style="margin:0">Termin ${p.t} — ${monthLabel(p.ym)}</p>
+          <p class="history__title" style="margin:0">Payout ${p.t} — ${monthLabel(p.ym)}</p>
           <p class="history__date" style="margin:1px 0 0">Untuk ${escapeHtml(state.settings.partnerName)} · dibayar ${fmtDate(p.paidAt)}</p>
+          ${p.proofs && p.proofs.length ? `<button type="button" class="link-btn history__proof" data-proof="${p.ym}-${p.t}">Lihat bukti transfer${p.proofs.length > 1 ? ` (${p.proofs.length})` : ""}</button>` : ""}
         </div>
         <span class="history__amount">${fmtRp(p.share)}</span>
       `;
@@ -740,27 +877,28 @@
     applyTheme(state.theme);
     try { localStorage.setItem(THEME_KEY, state.theme); } catch { /* abaikan */ }
 
-    els.partnerLabel.textContent = `Profit sharing · ${state.settings.partnerName} (${state.settings.sharePct}%)`;
+    els.partnerLabel.textContent = "Profit Sharing - Made with <3";
     els.monthTitle.textContent = monthLabel(viewMonth);
     renderKpi();
     renderTermins();
     renderEntries();
+    renderSubsidies();
     renderHistory();
     save();
   }
 
   // ---------- Chart overlay ----------
 
-  let chartMetric = "margin"; // "margin" | "share" | "net"
-  let chartData = [];          // satu item per kolom batang (urutan sama dengan DOM)
+  let chartShow = { margin: true, share: true, net: true }; // garis yang ditampilkan
+  let chartData = [];          // satu item per bulan di rentang (urutan sama dengan sumbu X)
   let rangeFrom = null;        // "YYYY-MM"; null = default 12 bulan terakhir
   let rangeTo = null;
 
-  const METRIC_INFO = {
-    margin: { label: "Margin kotor", css: "var(--accent)" },
-    share:  { label: "Share partner", css: "var(--warn)" },
-    net:    { label: "Profit bersih", css: "var(--good)" },
-  };
+  const SERIES = [
+    { key: "margin", label: "Margin kotor" },
+    { key: "share",  label: "Share partner" },
+    { key: "net",    label: "Profit bersih" },
+  ];
 
   function computeMonth(ym) {
     const t1 = terminTotals(ym, 1);
@@ -850,71 +988,221 @@
     els.chartTotalNet.textContent = fmtRp(totalMargin - totalShare);
     els.chartTotalDue.textContent = fmtRp(totalDue);
 
-    // bar chart: semua bulan di rentang (bulan kosong tetap punya kolom supaya sumbu waktu jujur)
-    const info = METRIC_INFO[chartMetric];
-    els.chartUnit.textContent = info.label;
-    const multiYear = rangeFrom.slice(0, 4) !== rangeTo.slice(0, 4);
-    const frag = document.createDocumentFragment();
+    for (const btn of els.chartLegend.querySelectorAll("[data-series]")) {
+      btn.setAttribute("aria-pressed", String(chartShow[btn.dataset.series]));
+    }
+
     if (withData.length === 0) {
       chartData = [];
-      const empty = document.createElement("p");
-      empty.className = "chart-empty";
-      empty.textContent = state.entries.length ? "Tidak ada data di rentang ini." : "Belum ada data. Tambahkan margin dulu.";
-      frag.appendChild(empty);
-      els.barChart.style.height = "auto";
+      drawEmptyChart(state.entries.length ? "Tidak ada data di rentang ini." : "Belum ada data. Tambahkan invoice dulu.");
     } else {
-      els.barChart.style.height = "";
-      const max = Math.max(...chartData.map((d) => d[chartMetric]), 1);
-      chartData.forEach((d, i) => {
-        const v = d[chartMetric];
-        const pct = Math.max((v / max) * 100, v > 0 ? 3 : 0);
-        // tahun ditulis di kolom pertama dan setiap Januari kalau rentang lintas tahun
-        const showYear = multiYear && (i === 0 || d.ym.endsWith("-01"));
-        const col = document.createElement("div");
-        col.className = "chart__col" + (d.ym === cur ? " is-current" : "");
-        col.innerHTML = `
-          <div class="chart__barwrap"><div class="chart__bar" style="--h:${pct}%; --bar-color:${info.css}"></div></div>
-          <span class="chart__label">${shortMonth(d.ym, false)}</span>
-          ${multiYear ? `<span class="chart__year">${showYear ? d.ym.slice(0, 4) : "&nbsp;"}</span>` : ""}
-        `;
-        col.title = `${monthLabel(d.ym)} · ${info.label}: ${fmtRp(v)}`;
-        frag.appendChild(col);
+      drawLineChart();
+    }
+    renderChartTable(withData, cur);
+  }
+
+  // ---- Grafik garis (SVG) ----
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs = {}, text) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  // Angka ringkas untuk sumbu: 1,5 M / 12 jt / 500 rb
+  function fmtCompact(n) {
+    const abs = Math.abs(n);
+    const f = (v) => v.toLocaleString("id-ID", { maximumFractionDigits: v < 10 ? 1 : 0 });
+    if (abs >= 1e9) return f(n / 1e9) + " M";
+    if (abs >= 1e6) return f(n / 1e6) + " jt";
+    if (abs >= 1e3) return f(n / 1e3) + " rb";
+    return String(Math.round(n));
+  }
+
+  // Skala sumbu Y yang "bulat": kelipatan 1 / 2 / 2,5 / 5 × 10^k, sekitar 4 garis.
+  function niceScale(max) {
+    if (max <= 0) return { top: 1, step: 0.25 };
+    const raw = max / 4;
+    const pow = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).find((s) => s >= raw);
+    return { top: Math.ceil(max / step) * step, step };
+  }
+
+  // Kurva halus yang tidak "melampaui" titik data (monotone cubic / Fritsch–Carlson).
+  function monotonePath(pts) {
+    if (pts.length === 1) return `M${pts[0][0]},${pts[0][1]}`;
+    const n = pts.length;
+    const dx = [], m = [], t = new Array(n);
+    for (let i = 0; i < n - 1; i++) {
+      dx[i] = pts[i + 1][0] - pts[i][0];
+      m[i] = (pts[i + 1][1] - pts[i][1]) / dx[i];
+    }
+    t[0] = m[0];
+    t[n - 1] = m[n - 2];
+    for (let i = 1; i < n - 1; i++) t[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+    for (let i = 0; i < n - 1; i++) {
+      if (m[i] === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+      const a = t[i] / m[i], b = t[i + 1] / m[i], h = a * a + b * b;
+      if (h > 9) { const k = 3 / Math.sqrt(h); t[i] = k * a * m[i]; t[i + 1] = k * b * m[i]; }
+    }
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 0; i < n - 1; i++) {
+      const h = dx[i] / 3;
+      d += ` C${pts[i][0] + h},${pts[i][1] + t[i] * h} ${pts[i + 1][0] - h},${pts[i + 1][1] - t[i + 1] * h} ${pts[i + 1][0]},${pts[i + 1][1]}`;
+    }
+    return d;
+  }
+
+  let chartGeo = null; // { xs, top, bottom } — dipakai layer hover
+
+  function drawEmptyChart(msg) {
+    chartGeo = null;
+    els.chartTip.hidden = true;
+    const svg = els.lineSvg;
+    svg.setAttribute("viewBox", "0 0 300 120");
+    svg.style.height = "120px";
+    svg.replaceChildren(svgEl("text", { x: 150, y: 64, "text-anchor": "middle", class: "lchart__empty" }, msg));
+  }
+
+  function drawLineChart() {
+    const svg = els.lineSvg;
+    const W = Math.max(280, els.lineChart.clientWidth || 600);
+    const H = W < 480 ? 220 : 260;
+    const series = SERIES.filter((s) => chartShow[s.key]);
+    const max = Math.max(1, ...chartData.flatMap((d) => series.map((s) => d[s.key])));
+    const { top: yTop, step } = niceScale(max);
+
+    const padL = Math.max(...Array.from({ length: Math.round(yTop / step) + 1 }, (_, i) => fmtCompact(i * step).length)) * 6.6 + 14;
+    const padR = 14, padT = 12, padB = 30;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const n = chartData.length;
+    const xs = chartData.map((_, i) => padL + (n === 1 ? plotW / 2 : (i * plotW) / (n - 1)));
+    const y = (v) => padT + plotH - (v / yTop) * plotH;
+
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.style.height = H + "px";
+    const frag = document.createDocumentFragment();
+
+    // gradien area margin kotor
+    const defs = svgEl("defs");
+    const grad = svgEl("linearGradient", { id: "areaGrad", x1: 0, y1: 0, x2: 0, y2: 1 });
+    grad.append(
+      svgEl("stop", { offset: "0%", "stop-color": "var(--s-margin)", "stop-opacity": "0.18" }),
+      svgEl("stop", { offset: "100%", "stop-color": "var(--s-margin)", "stop-opacity": "0" }),
+    );
+    defs.append(grad);
+    frag.append(defs);
+
+    // grid + label sumbu Y
+    for (let v = 0; v <= yTop + step / 2; v += step) {
+      const yy = Math.round(y(v)) + 0.5;
+      frag.append(svgEl("line", { x1: padL, x2: W - padR, y1: yy, y2: yy, class: v === 0 ? "lchart__base" : "lchart__grid" }));
+      frag.append(svgEl("text", { x: padL - 8, y: yy + 3.5, "text-anchor": "end", class: "lchart__tick" }, v === 0 ? "0" : fmtCompact(v)));
+    }
+
+    // label sumbu X — dijarangkan supaya tidak bertabrakan
+    const multiYear = rangeFrom.slice(0, 4) !== rangeTo.slice(0, 4);
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(plotW / (multiYear ? 52 : 40)))));
+    chartData.forEach((d, i) => {
+      if ((n - 1 - i) % every !== 0) return; // selalu tampilkan bulan terakhir
+      let label = shortMonth(d.ym, false);
+      if (multiYear && (i === 0 || d.ym.endsWith("-01") || every > 1)) label += " " + d.ym.slice(2, 4);
+      const anchor = n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle";
+      frag.append(svgEl("text", { x: xs[i], y: H - 10, "text-anchor": anchor, class: "lchart__tick" }, label));
+    });
+
+    // area + garis (margin paling belakang)
+    for (const s of [...series].reverse()) {
+      const pts = chartData.map((d, i) => [xs[i], y(d[s.key])]);
+      const d = monotonePath(pts);
+      if (s.key === "margin" && n > 1) {
+        frag.append(svgEl("path", { d: `${d} L${xs[n - 1]},${y(0)} L${xs[0]},${y(0)} Z`, fill: "url(#areaGrad)" }));
+      }
+      frag.append(svgEl("path", { d, class: "lchart__line", stroke: `var(--s-${s.key})` }));
+      // titik: semua bulan kalau sedikit, kalau banyak cukup titik terakhir
+      pts.forEach(([px, py], i) => {
+        if (n > 12 && i !== n - 1) return;
+        frag.append(svgEl("circle", { cx: px, cy: py, r: 4, class: "lchart__dot", fill: `var(--s-${s.key})` }));
       });
     }
-    els.barChart.classList.toggle("chart--scroll", chartData.length > 12);
-    els.barChart.replaceChildren(frag);
-    els.barChart.scrollLeft = els.barChart.scrollWidth; // bulan terbaru terlihat duluan
 
-    // month rows (detail per bulan) — hanya bulan yang ada datanya
-    const rows = document.createDocumentFragment();
-    if (withData.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "chart-empty";
-      empty.textContent = "—";
-      rows.appendChild(empty);
-    } else {
-      const max = Math.max(...withData.map((d) => d[chartMetric]), 1);
-      for (const d of withData) {
-        const v = d[chartMetric];
-        const [y, m] = d.ym.split("-").map(Number);
-        const label = new Date(y, m - 1, 1).toLocaleDateString("id-ID", { month: "short", year: "2-digit" });
-        const row = document.createElement("div");
-        row.className = "chart__row" + (d.ym === cur ? " is-current" : "");
-        const w = (v / max) * 100;
-        row.innerHTML = `
-          <span class="chart__row-month">${label}</span>
-          <div class="chart__row-bar" style="--w:${w}%; --bar-color:${info.css}"></div>
-          <span class="chart__row-val">${fmtRp(v)}</span>
-          <span class="chart__row-paid">${d.paidCount === 2
-            ? `<span class="badge badge--paid"><span class="badge__dot"></span>Lunas</span>`
-            : d.paidCount === 0
-              ? `<span class="badge badge--unpaid"><span class="badge__dot"></span>Unpaid</span>`
-              : "1/2 lunas"}</span>
-        `;
-        rows.appendChild(row);
-      }
+    // layer hover
+    const hover = svgEl("g", { class: "lchart__hover", visibility: "hidden" });
+    hover.append(svgEl("line", { y1: padT, y2: padT + plotH, class: "lchart__cross" }));
+    for (const s of series) hover.append(svgEl("circle", { r: 5.5, class: "lchart__dot lchart__dot--hl", fill: `var(--s-${s.key})`, "data-k": s.key }));
+    frag.append(hover);
+    frag.append(svgEl("rect", { x: padL - 10, y: 0, width: plotW + 20, height: H, fill: "transparent", class: "lchart__hit" }));
+
+    svg.replaceChildren(frag);
+    chartGeo = { xs, y, W, series, hover };
+    els.chartTip.hidden = true;
+  }
+
+  function nearestIndex(clientX) {
+    const rect = els.lineSvg.getBoundingClientRect();
+    const x = ((clientX - rect.left) / rect.width) * chartGeo.W;
+    let best = 0;
+    chartGeo.xs.forEach((px, i) => { if (Math.abs(px - x) < Math.abs(chartGeo.xs[best] - x)) best = i; });
+    return best;
+  }
+
+  function showChartTip(i) {
+    if (!chartGeo || !chartData[i]) return;
+    const d = chartData[i];
+    const { xs, y, hover, series, W } = chartGeo;
+    hover.setAttribute("visibility", "visible");
+    const cross = hover.querySelector(".lchart__cross");
+    cross.setAttribute("x1", xs[i]);
+    cross.setAttribute("x2", xs[i]);
+    for (const c of hover.querySelectorAll("circle")) {
+      c.setAttribute("cx", xs[i]);
+      c.setAttribute("cy", y(d[c.dataset.k]));
     }
-    els.chartMonthRows.replaceChildren(rows);
+
+    const status = d.margin === 0 ? "Tidak ada invoice"
+      : d.paidCount === 2 ? "Lunas" : d.paidCount === 0 ? `Belum dibayar ${fmtRp(d.due)}` : `1/2 lunas · sisa ${fmtRp(d.due)}`;
+    const tip = els.chartTip;
+    tip.innerHTML = `
+      <p class="lchart__tip-title">${monthLabel(d.ym)}</p>
+      ${series.map((s) => `
+        <p class="lchart__tip-row"><span class="legend__key sdot--${s.key}"></span><span>${s.label}</span><b>${fmtRp(d[s.key])}</b></p>`).join("")}
+      <p class="lchart__tip-status">${status}</p>
+      <button type="button" class="link-btn lchart__tip-open" data-open-month="${d.ym}">Buka bulan ini →</button>
+    `;
+    tip.hidden = false;
+    // posisi: di sisi kanan titik, pindah ke kiri kalau mepet tepi
+    const boxW = els.lineChart.clientWidth;
+    const px = (xs[i] / W) * boxW;
+    const tw = tip.offsetWidth;
+    tip.style.left = (px + 14 + tw > boxW ? Math.max(0, px - 14 - tw) : px + 14) + "px";
+  }
+
+  function hideChartTip() {
+    if (chartGeo) chartGeo.hover.setAttribute("visibility", "hidden");
+    els.chartTip.hidden = true;
+  }
+
+  // Tabel per bulan (bulan yang ada datanya, terbaru di atas)
+  function renderChartTable(withData, cur) {
+    const wrap = els.chartMonthRows;
+    if (withData.length === 0) { wrap.replaceChildren(); return; }
+    const rows = [...withData].reverse().map((d) => {
+      const [y, m] = d.ym.split("-").map(Number);
+      const label = new Date(y, m - 1, 1).toLocaleDateString("id-ID", { month: "short", year: "numeric" });
+      const status = d.paidCount === 2
+        ? `<span class="badge badge--paid"><span class="badge__dot"></span>Lunas</span>`
+        : d.paidCount === 0
+          ? `<span class="badge badge--unpaid"><span class="badge__dot"></span>Unpaid</span>`
+          : `<span class="ctable__part">1/2 lunas</span>`;
+      return `<tr class="${d.ym === cur ? "is-current" : ""}" data-open-month="${d.ym}">
+        <th scope="row">${label}</th>
+        <td>${fmtRp(d.margin)}</td><td>${fmtRp(d.share)}</td><td>${fmtRp(d.net)}</td><td>${status}</td></tr>`;
+    }).join("");
+    wrap.innerHTML = `<table class="ctable">
+      <thead><tr><th scope="col">Bulan</th><th scope="col">Margin kotor</th><th scope="col">Share</th><th scope="col">Profit bersih</th><th scope="col">Status</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
   }
 
   // ---------- Toast ----------
@@ -945,15 +1233,248 @@
       const t = Number(mark.dataset.mark);
       const totals = terminTotals(viewMonth, t);
       const msg = totals.paid
-        ? `Tandai sisa Termin ${t} bulan ${monthLabel(viewMonth)} sebesar ${fmtRp(totals.remaining)} sebagai SUDAH DIBAYAR? (total menjadi ${fmtRp(totals.share)})`
-        : `Tandai Termin ${t} bulan ${monthLabel(viewMonth)} sebagai SUDAH DIBAYAR sebesar ${fmtRp(totals.share)}?`;
-      if (confirm(msg)) markPaid(viewMonth, t, true);
+        ? `Sisa Payout ${t} bulan ${monthLabel(viewMonth)} sebesar ${fmtRp(totals.remaining)} (total menjadi ${fmtRp(totals.payable)}).`
+        : `Payout ${t} bulan ${monthLabel(viewMonth)} sebesar ${fmtRp(totals.payable)}.`;
+      openProofDialog(viewMonth, t, msg);
     } else if (unmark) {
       const t = Number(unmark.dataset.unmark);
-      if (confirm(`Batalkan tanda bayar Termin ${t} bulan ${monthLabel(viewMonth)}? Catatan pembayaran akan dihapus dari riwayat.`)) {
+      if (confirm(`Batalkan tanda bayar Payout ${t} bulan ${monthLabel(viewMonth)}? Catatan pembayaran akan dihapus dari riwayat.`)) {
         markPaid(viewMonth, t, false);
       }
     }
+  });
+
+  // ---------- Link detail payout untuk partner (WhatsApp) ----------
+
+  const b64url = (b64) => b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const shareLink = (share) => `${appUrl()}share.html#${share.id}.${b64url(share.k)}`;
+
+  // 08xx / 8xx / +62xx -> 62xx (format wa.me). Kosong kalau nomor tidak valid.
+  function waPhone(raw) {
+    let d = String(raw || "").replace(/\D/g, "");
+    if (d.startsWith("0")) d = "62" + d.slice(1);
+    else if (d.startsWith("8")) d = "62" + d;
+    return d.length >= 10 ? d : "";
+  }
+
+  function waUrl(key) {
+    const p = state.payouts[key];
+    const ym = key.slice(0, 7), t = Number(key.slice(8));
+    const lines = [
+      `Halo ${state.settings.partnerName}, Payout ${t} ${monthLabel(ym)} (tgl ${terminPeriod(ym, t)}) sudah dibayarkan ✅`,
+      ``,
+      `Jumlah: ${fmtRp(p.amount)}`,
+      `Tanggal bayar: ${fmtDate(p.paidAt)}`,
+      ``,
+      `Detail payout & invoice:`,
+      shareLink(p.share),
+    ];
+    const phone = waPhone(state.settings.partnerPhone);
+    return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join("\n"))}`;
+  }
+
+  // Ringkasan yang bisa dilihat partner — hanya payout ini, bukan seluruh data.
+  function shareSnapshot(ym, t) {
+    const totals = terminTotals(ym, t);
+    const p = state.payouts[terminKey(ym, t)];
+    return {
+      v: 1,
+      partnerName: state.settings.partnerName,
+      ym, t,
+      monthLabel: monthLabel(ym),
+      period: terminPeriod(ym, t),
+      paidAt: p.paidAt,
+      paidAmount: p.amount,
+      payments: (p.proofs || []).map((x) => ({ at: x.at, amount: x.amount })),
+      profit: totals.profit,
+      share: totals.share,
+      subsidy: totals.subsidy,
+      payable: totals.payable,
+      entries: terminEntries(ym, t).map((e) => ({
+        date: e.date, amount: e.amount, note: e.note, sharePct: e.sharePct,
+        share: Math.round(e.amount * (e.sharePct / 100)),
+      })),
+      subsidies: terminSubsidies(ym, t).map((x) => ({ amount: x.amount, purpose: x.purpose })),
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  // Buat link baru untuk payout ini (menggantikan link lama, mis. setelah bayar sisa).
+  async function createShare(ym, t) {
+    const key = terminKey(ym, t);
+    const json = JSON.stringify(shareSnapshot(ym, t));
+    const { k, data } = await encryptReceipt(new TextEncoder().encode(json), "application/json");
+    const id = newId();
+    await remote.putShare(id, data);
+    const p = state.payouts[key];
+    if (!p) return; // keburu dibatalkan
+    const old = p.share;
+    p.share = { id, k };
+    if (old) remote.deleteShares([old.id]).catch(() => {});
+    render();
+  }
+
+  const waDlg = $("waDialog");
+  function openWaDialog(key) {
+    const ym = key.slice(0, 7), t = Number(key.slice(8));
+    const phone = waPhone(state.settings.partnerPhone);
+    $("waText").textContent = phone
+      ? `Kirim kabar ke ${state.settings.partnerName} (+${phone}) bahwa Payout ${t} ${monthLabel(ym)} sudah dibayarkan, lengkap dengan link detail payout & invoice?`
+      : `Kirim kabar ke ${state.settings.partnerName} bahwa Payout ${t} ${monthLabel(ym)} sudah dibayarkan? Nomor WhatsApp partner belum diisi di Pengaturan — kamu akan memilih kontak di WhatsApp.`;
+    $("waLink").href = waUrl(key);
+    waDlg.showModal();
+  }
+  $("waLink").addEventListener("click", () => setTimeout(() => waDlg.close(), 0));
+
+  // ---------- Bukti transfer ----------
+
+  const proofDlg = $("proofDialog");
+  const proofViewDlg = $("proofViewDialog");
+  let proofTarget = null;   // { ym, t }
+  let proofBlob = null;     // gambar yang sudah dikompres, siap dienkripsi
+  const proofUrls = new Map(); // id -> object URL (cache selama sesi)
+
+  // Perkecil screenshot (sisi terpanjang maks 1600px, JPEG) supaya upload cepat dan hemat ruang.
+  async function compressImage(file) {
+    const MAX = 1600;
+    const img = await createImageBitmap(file);
+    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; // PNG transparan -> latar putih
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    img.close && img.close();
+    for (const q of [0.82, 0.7, 0.55]) {
+      const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", q));
+      if (blob && blob.size <= 1_500_000) return blob;
+    }
+    throw new UserError("Gambar terlalu besar — coba screenshot yang lebih kecil");
+  }
+
+  function openProofDialog(ym, t, msg) {
+    proofTarget = { ym, t };
+    proofBlob = null;
+    $("proofText").textContent = `${msg} Lampirkan screenshot bukti transfer untuk menandai sudah dibayar.`;
+    $("proofFile").value = "";
+    $("proofPreview").hidden = true;
+    $("proofPreview").removeAttribute("src");
+    $("proofError").textContent = cloudConfigured() ? "" : "Bukti transfer butuh sinkron cloud (Supabase) yang aktif.";
+    $("btnProofSave").disabled = true;
+    proofDlg.showModal();
+  }
+
+  $("proofFile").addEventListener("change", async () => {
+    const file = $("proofFile").files[0];
+    proofBlob = null;
+    $("btnProofSave").disabled = true;
+    $("proofError").textContent = "";
+    const prev = $("proofPreview");
+    if (prev.src) URL.revokeObjectURL(prev.src);
+    prev.hidden = true;
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      $("proofError").textContent = "File harus berupa gambar (screenshot).";
+      return;
+    }
+    try {
+      proofBlob = await compressImage(file);
+      prev.src = URL.createObjectURL(proofBlob);
+      prev.hidden = false;
+      $("btnProofSave").disabled = false;
+    } catch (e) {
+      $("proofError").textContent = e instanceof UserError ? e.message : "Gambar tidak bisa dibaca — coba file lain.";
+    }
+  });
+
+  $("btnProofCancel").addEventListener("click", () => proofDlg.close());
+  proofDlg.addEventListener("close", () => {
+    const prev = $("proofPreview");
+    if (prev.src) URL.revokeObjectURL(prev.src);
+    prev.removeAttribute("src");
+  });
+
+  $("proofForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (!proofBlob || !proofTarget) {
+      $("proofError").textContent = "Pilih screenshot bukti transfer dulu.";
+      return;
+    }
+    if (!session) {
+      $("proofError").textContent = "Butuh koneksi internet untuk upload bukti transfer.";
+      return;
+    }
+    const btn = $("btnProofSave");
+    setBusy(btn, true);
+    try {
+      const id = newId();
+      const { k, data } = await encryptReceipt(await proofBlob.arrayBuffer(), proofBlob.type);
+      await remote.putReceipt(id, data);
+      proofUrls.set(id, URL.createObjectURL(proofBlob));
+      const { ym, t } = proofTarget;
+      markPaid(ym, t, true, { id, k });
+      try {
+        await createShare(ym, t);
+        setBusy(btn, false);
+        proofDlg.close();
+        openWaDialog(terminKey(ym, t));
+      } catch {
+        setBusy(btn, false);
+        proofDlg.close();
+        toast("Ditandai dibayar — tapi link untuk partner gagal dibuat");
+      }
+    } catch (e) {
+      setBusy(btn, false);
+      $("proofError").textContent = isNetworkError(e)
+        ? "Upload gagal — periksa koneksi internet lalu coba lagi."
+        : `Upload gagal: ${e.message}`;
+    }
+  });
+
+  async function showProofs(key) {
+    const payout = state.payouts[key];
+    if (!payout || !payout.proofs || !payout.proofs.length) return;
+    const ym = key.slice(0, 7);
+    $("proofViewTitle").textContent = `Bukti transfer — Payout ${key.slice(8)} ${monthLabel(ym)}`;
+    $("proofViewError").textContent = "";
+    const list = $("proofViewList");
+    list.replaceChildren();
+    proofViewDlg.showModal();
+
+    for (const p of payout.proofs) {
+      const fig = document.createElement("figure");
+      fig.className = "proof__item proof__item--loading";
+      fig.textContent = "Memuat…";
+      list.appendChild(fig);
+      try {
+        let url = proofUrls.get(p.id);
+        if (!url) {
+          if (!session) throw new UserError("Butuh koneksi internet untuk memuat bukti transfer.");
+          const data = await remote.getReceipt(p.id);
+          if (!data) throw new UserError("Bukti transfer tidak ditemukan di cloud.");
+          url = URL.createObjectURL(await decryptReceipt(p.k, data));
+          proofUrls.set(p.id, url);
+        }
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = "Bukti transfer";
+        const cap = document.createElement("figcaption");
+        cap.textContent = [p.amount !== null ? fmtRp(p.amount) : null, p.at ? fmtDate(p.at) : null].filter(Boolean).join(" · ");
+        fig.className = "proof__item";
+        fig.replaceChildren(img, cap);
+      } catch (e) {
+        fig.remove();
+        $("proofViewError").textContent = e instanceof UserError ? e.message
+          : isNetworkError(e) ? "Gagal memuat bukti — periksa koneksi internet." : `Gagal memuat bukti: ${e.message}`;
+      }
+    }
+  }
+
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-proof]");
+    if (btn) showProofs(btn.dataset.proof);
   });
 
   els.entryList.addEventListener("click", (ev) => {
@@ -961,10 +1482,10 @@
     if (!btn) return;
     const id = btn.dataset.del;
     const entry = state.entries.find((e) => e.id === id);
-    if (entry && confirm(`Hapus entri ${fmtRp(entry.amount)} tanggal ${fmtDate(entry.date)}?`)) {
+    if (entry && confirm(`Hapus invoice ${fmtRp(entry.amount)} tanggal ${fmtDate(entry.date)}?`)) {
       state.entries = state.entries.filter((e) => e.id !== id);
       render();
-      toast("Entri dihapus");
+      toast("Invoice dihapus");
     }
   });
 
@@ -973,14 +1494,43 @@
     const date = els.entryDate.value;
     const amount = Math.round(Number(els.entryAmount.value));
     const note = els.entryNote.value.trim();
+    const pctIn = els.entryPct.value.trim();
+    const sharePct = pctIn !== "" && Number.isFinite(Number(pctIn)) ? clamp(Number(pctIn), 0, 100) : state.settings.sharePct;
     if (!date || !(amount > 0)) return;
 
-    state.entries.push({ id: newId(), date, amount, note });
+    state.entries.push({ id: newId(), date, amount, note, sharePct });
     viewMonth = date.slice(0, 7); // lompat ke bulan entri baru
     els.entryAmount.value = "";
     els.entryNote.value = "";
+    els.entryPct.value = state.settings.sharePct; // balik ke default
     render();
-    toast(`Margin kotor ${fmtRp(amount)} disimpan — Termin ${terminOf(date)}`);
+    toast(`Invoice ${fmtRp(amount)} disimpan — Payout ${terminOf(date)}`);
+  });
+
+  els.subsidyForm.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const termin = Number(els.subsidyTermin.value) === 2 ? 2 : 1;
+    const amount = Math.round(Number(els.subsidyAmount.value));
+    const purpose = els.subsidyPurpose.value.trim();
+    if (!(amount > 0) || !purpose) return;
+
+    state.subsidies.push({ id: newId(), ym: viewMonth, termin, amount, purpose });
+    els.subsidyAmount.value = "";
+    els.subsidyPurpose.value = "";
+    render();
+    toast(`Subsidi silang ${fmtRp(amount)} dipotong dari Payout ${termin} — ${monthLabel(viewMonth)}`);
+  });
+
+  els.subsidyList.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-del-subsidy]");
+    if (!btn) return;
+    const id = btn.dataset.delSubsidy;
+    const x = state.subsidies.find((s) => s.id === id);
+    if (x && confirm(`Hapus subsidi silang ${fmtRp(x.amount)} (Payout ${x.termin})?`)) {
+      state.subsidies = state.subsidies.filter((s) => s.id !== id);
+      render();
+      toast("Subsidi silang dihapus");
+    }
   });
 
   // Default tanggal entri: hari ini saat melihat bulan aktif, tanggal 1 untuk bulan lain.
@@ -997,6 +1547,7 @@
 
   $("btnSettings").addEventListener("click", () => {
     $("setPartnerName").value = state.settings.partnerName;
+    $("setPartnerPhone").value = state.settings.partnerPhone;
     $("setSharePct").value = state.settings.sharePct;
     $("setCutoff").value = state.settings.cutoff;
     dlg.showModal();
@@ -1012,7 +1563,9 @@
     const cutoffIn = $("setCutoff").value.trim();
     const pct = pctIn !== "" && Number.isFinite(Number(pctIn)) ? clamp(Number(pctIn), 0, 100) : state.settings.sharePct;
     const cutoff = cutoffIn !== "" && Number.isFinite(Number(cutoffIn)) ? clamp(Math.round(Number(cutoffIn)), 8, 23) : state.settings.cutoff;
-    state.settings = { partnerName: name, sharePct: pct, cutoff };
+    const phone = $("setPartnerPhone").value.replace(/[^\d+]/g, "").slice(0, 20);
+    state.settings = { partnerName: name, partnerPhone: phone, sharePct: pct, cutoff };
+    els.entryPct.value = pct;
     render();
     dlg.close();
     toast("Pengaturan disimpan");
@@ -1021,8 +1574,8 @@
   // ---------- Chart overlay events ----------
 
   const openChart = () => {
+    els.chartOverlay.hidden = false; // tampilkan dulu supaya lebar grafik bisa diukur
     renderChart();
-    els.chartOverlay.hidden = false;
     document.body.style.overflow = "hidden";
   };
 
@@ -1040,18 +1593,42 @@
     if (ev.key === "Escape" && !els.chartOverlay.hidden) closeChart();
   });
 
-  els.barChart.addEventListener("click", (ev) => {
-    const col = ev.target.closest(".chart__col");
-    if (!col) return;
-    // klik bulan -> lompat ke bulan itu di halaman utama
-    const idx = Array.from(els.barChart.children).indexOf(col);
-    const d = chartData[idx];
-    if (d) {
-      viewMonth = d.ym;
-      render();
-      closeChart();
-      toast(`${monthLabel(d.ym)} — ${fmtRp(d[chartMetric])}`);
-    }
+  const openMonth = (ym) => {
+    viewMonth = ym;
+    render();
+    closeChart();
+    toast(monthLabel(ym));
+  };
+
+  els.lineSvg.addEventListener("pointermove", (ev) => { if (chartGeo) showChartTip(nearestIndex(ev.clientX)); });
+  let lastPointer = "mouse"; // Safari lama: event click belum punya pointerType
+  els.lineSvg.addEventListener("pointerdown", (ev) => {
+    lastPointer = ev.pointerType || "mouse";
+    if (chartGeo) showChartTip(nearestIndex(ev.clientX));
+  });
+  els.lineChart.addEventListener("pointerleave", (ev) => { if (ev.pointerType === "mouse") hideChartTip(); });
+  // klik (mouse) di grafik -> lompat ke bulan itu; di layar sentuh, ketukan hanya menampilkan detail
+  els.lineSvg.addEventListener("click", (ev) => {
+    if (chartGeo && lastPointer === "mouse") openMonth(chartData[nearestIndex(ev.clientX)].ym);
+  });
+  els.chartOverlay.addEventListener("click", (ev) => {
+    const el = ev.target.closest("[data-open-month]");
+    if (el) openMonth(el.dataset.openMonth);
+  });
+
+  els.chartLegend.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-series]");
+    if (!btn) return;
+    const k = btn.dataset.series;
+    if (chartShow[k] && Object.values(chartShow).filter(Boolean).length === 1) return; // minimal satu garis
+    chartShow[k] = !chartShow[k];
+    renderChart();
+  });
+
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (!els.chartOverlay.hidden) renderChart(); }, 120);
   });
 
   $("rangeFrom").addEventListener("change", (ev) => {
@@ -1067,19 +1644,6 @@
   document.querySelectorAll("[data-preset]").forEach((btn) => {
     btn.addEventListener("click", () => {
       [rangeFrom, rangeTo] = presetRange(btn.dataset.preset);
-      renderChart();
-    });
-  });
-
-  document.querySelectorAll(".seg__btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".seg__btn").forEach((b) => {
-        b.classList.remove("is-active");
-        b.setAttribute("aria-selected", "false");
-      });
-      btn.classList.add("is-active");
-      btn.setAttribute("aria-selected", "true");
-      chartMetric = btn.dataset.metric;
       renderChart();
     });
   });
@@ -1112,19 +1676,24 @@
       return;
     }
     const n = data.entries.length;
-    if (!confirm(`Ganti SEMUA data saat ini dengan isi backup (${n} entri, ${Object.keys(data.payouts).length} pembayaran)?`)) return;
+    if (!confirm(`Ganti SEMUA data saat ini dengan isi backup (${n} invoice, ${Object.keys(data.payouts).length} pembayaran)?`)) return;
     state = data;
     backfillPayoutAmounts();
     viewMonth = today().slice(0, 7);
     render();
-    toast(`Backup dipulihkan — ${n} entri`);
+    toast(`Backup dipulihkan — ${n} invoice`);
   });
 
   $("btnReset").addEventListener("click", () => {
-    if (confirm("Hapus SEMUA data (entri, riwayat termin, pengaturan) di SEMUA perangkat yang memakai akun ini? Tindakan ini tidak bisa dibatalkan.")) {
+    if (confirm("Hapus SEMUA data (invoice, riwayat payout, pengaturan) di SEMUA perangkat yang memakai akun ini? Tindakan ini tidak bisa dibatalkan.")) {
       state = defaults();
       viewMonth = today().slice(0, 7);
       render();
+      if (session) {
+        // bukti transfer & link partner di cloud ikut dihapus
+        remote.deleteAllReceipts().catch(() => {});
+        remote.deleteAllShares().catch(() => {});
+      }
       toast("Semua data direset");
     }
   });
@@ -1187,6 +1756,7 @@
   function enterApp(data, { dirty = false } = {}) {
     state = normalize(data);
     backfillPayoutAmounts();
+    els.entryPct.value = state.settings.sharePct;
     // dirty = data belum ada di cloud (akun baru / migrasi) -> render() akan menyimpan & mengirimnya
     lastSavedJson = dirty ? null : JSON.stringify(state);
     viewMonth = today().slice(0, 7);
@@ -1259,7 +1829,7 @@
       localStorage.removeItem(ENC_KEY);
       localStorage.removeItem(STORE_KEY);
     } catch { /* abaikan */ }
-    toast(`Data lama (${state.entries.length} entri) dipindahkan ke akun cloud`);
+    toast(`Data lama (${state.entries.length} invoice) dipindahkan ke akun cloud`);
   }
 
   async function doLogin(email, pw) {

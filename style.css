@@ -513,6 +513,7 @@ body {
 
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .field--grow { flex: 2 1 200px; }
+.form__row > .field--pct { flex: 0 0 96px; }
 .field > span { font-size: 12.5px; font-weight: 500; color: var(--text-secondary); }
 .field em { font-style: normal; color: var(--text-muted); font-weight: 400; }
 .field small { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
@@ -541,9 +542,6 @@ body {
 .entries, .history { list-style: none; margin: 0; padding: 0; }
 
 .entry {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   padding: 11px 0;
   border-bottom: 1px solid var(--hairline);
 }
@@ -568,6 +566,23 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.entry__share { display: block; font-size: 11.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Baris entri sebagai grid: tanggal + nominal + tag/hapus di baris 1,
+   catatan & share boleh memanjang ke bawah tag supaya tidak terpotong di HP. */
+.entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "date amount side" ". note note" ". share share";
+  align-items: center;
+  gap: 1px 12px;
+}
+.entry__body { display: contents; }
+.entry__date { grid-area: date; }
+.entry__amount { grid-area: amount; }
+.entry__note { grid-area: note; }
+.entry__share { grid-area: share; }
+.entry__side { grid-area: side; }
 
 .entry__side { display: flex; align-items: center; gap: 6px; }
 
@@ -955,15 +970,46 @@ body {
 
 @media (max-width: 480px) {
   .topbar { gap: 8px; }
+  .topbar__brand { gap: 10px; }
+  .topbar__logo { width: 36px; height: 36px; flex-basis: 36px; border-radius: 10px; font-size: 15px; }
+  /* nama partner boleh turun ke baris 2 daripada terpotong "…" */
+  .topbar__sub { white-space: normal; line-height: 1.3; font-size: 12.5px; }
   .topbar__actions { gap: 4px; }
   .topbar__actions .icon-btn { width: 36px; height: 36px; border-radius: 10px; }
-  .tiles { grid-template-columns: 1fr 1fr; }
-  .tile__value { font-size: 17px; }
+
+  .tiles { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tile { padding: 12px 12px 11px; }
+  /* label 2 baris: titik ikut baris pertama, bukan di tengah */
+  .tile__label { align-items: flex-start; font-size: 12px; line-height: 1.3; margin-bottom: 6px; }
+  .tile__label .tile__dot { margin-top: 4px; }
+  /* nominal jangan patah setelah "Rp"; ukuran ikut lebar layar */
+  .tile__value { font-size: clamp(15px, 4.4vw, 18px); white-space: nowrap; overflow-wrap: normal; }
+  .tile--wide .tile__value { font-size: clamp(19px, 5.6vw, 22px); }
+
   .termins { grid-template-columns: 1fr; }
   .termin__share-value { font-size: 22px; }
-  .form__row > .field { flex: 1 1 100%; }
+
+  /* tanggal + jumlah tetap sebaris, catatan + tombol simpan penuh */
+  .form__row:first-child > .field { flex: 1 1 0; }
+  .form__row:last-child > .field { flex: 1 1 0; }
+  .form__row:last-child > .field--pct { flex: 0 0 84px; }
   .form__row .btn { width: 100%; }
+
+  .entry { column-gap: 8px; }
+  .entry__date { flex-basis: 74px; min-width: 74px; font-size: 11.5px; white-space: nowrap; }
+  .entry__amount { white-space: nowrap; font-size: 14px; }
+  .entry__tag { padding: 2px 6px; }
+  .entry__side { gap: 2px; }
+  .del-btn { width: 36px; height: 36px; }
+
+  /* semua item riwayat sudah lunas — badge PAID cuma makan tempat */
+  .history__item > .badge { display: none; }
+  .history__date { display: block; }
+
+  .chart-block__note { white-space: nowrap; }
 }
+
+button, a { -webkit-tap-highlight-color: transparent; }
 
 @media (min-width: 560px) {
   .termins { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -977,3 +1023,123 @@ body {
   .topbar__actions, .btn, .del-btn, .footer, .toast { display: none !important; }
   body { background: #fff; color: #000; }
 }
+
+/* ---------- Subsidi silang ---------- */
+
+.field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--plane);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 16px;
+}
+.field select:focus { outline: none; border-color: var(--accent); background: var(--surface-2); }
+.form__row > .field--pct:has(select) { flex-basis: 120px; }
+.form__hint { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+.subsidies:not(:empty) { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--hairline); }
+.figure__value--neg { color: var(--warn); }
+.subsidies .entry { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "amount side" "note note"; }
+
+/* ---------- Bukti transfer ---------- */
+
+.field input[type="file"] { min-height: 0; padding: 9px 10px; font-size: 14px; }
+.dialog--wide { width: min(560px, calc(100vw - 32px)); }
+.proof__preview {
+  display: block;
+  max-width: 100%;
+  max-height: 40vh;
+  margin: 0 auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+.proof__preview[hidden] { display: none; }
+.proof__list { display: flex; flex-direction: column; gap: 14px; max-height: 65vh; overflow-y: auto; }
+.proof__item { margin: 0; }
+.proof__item img { display: block; width: 100%; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+.proof__item figcaption { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.proof__item--loading { padding: 24px 0; text-align: center; font-size: 13px; color: var(--text-muted); }
+.history__proof { margin-top: 2px; font-size: 12px; }
+a.btn { text-decoration: none; }
+
+/* ---------- Grafik garis ---------- */
+
+/* Warna seri: palet kategorikal slot 1–3, divalidasi per tema (CVD ΔE ≥ 9). */
+:root {
+  --s-margin: #3987e5;
+  --s-share:  #d95926;
+  --s-net:    #199e70;
+  --chart-grid: #2c2c2a;
+  --chart-axis: #383835;
+}
+:root[data-theme="light"] {
+  --s-margin: #2a78d6;
+  --s-share:  #eb6834;
+  --s-net:    #1baf7a;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+}
+.sdot--margin { background: var(--s-margin); }
+.sdot--share  { background: var(--s-share); }
+.sdot--net    { background: var(--s-net); }
+
+.chart-block__head { flex-wrap: wrap; gap: 8px 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px; }
+.legend__item {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 30px; padding: 4px 10px;
+  border: 1px solid var(--hairline); border-radius: 999px;
+  background: transparent; color: var(--text-secondary);
+  font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.legend__item:hover { background: var(--surface-3); color: var(--text-primary); }
+.legend__item[aria-pressed="false"] { opacity: 0.45; }
+.legend__item[aria-pressed="false"] .legend__key { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-muted); }
+.legend__key { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 3px; }
+
+.lchart { position: relative; margin: 6px 0 4px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.lchart__svg { display: block; width: 100%; overflow: visible; }
+.lchart__grid { stroke: var(--chart-grid); stroke-width: 1; }
+.lchart__base { stroke: var(--chart-axis); stroke-width: 1; }
+.lchart__tick { fill: var(--text-muted); font-size: 11px; font-family: var(--font); font-variant-numeric: tabular-nums; }
+.lchart__empty { fill: var(--text-muted); font-size: 13px; font-family: var(--font); }
+.lchart__line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lchart__dot { stroke: var(--surface-1); stroke-width: 2; }
+.lchart__dot--hl { stroke-width: 2.5; }
+.lchart__cross { stroke: var(--text-muted); stroke-width: 1; opacity: 0.6; }
+.lchart__hit { cursor: crosshair; }
+
+.lchart__tip {
+  position: absolute; top: 4px; z-index: 2;
+  min-width: 200px; padding: 10px 12px;
+  border: 1px solid var(--hairline-2); border-radius: var(--radius-sm);
+  background: var(--surface-2); box-shadow: var(--shadow);
+  font-size: 12.5px; pointer-events: auto;
+}
+.lchart__tip[hidden] { display: none; }
+.lchart__tip p { margin: 0; }
+.lchart__tip-title { font-weight: 650; margin-bottom: 6px !important; }
+.lchart__tip-row { display: flex; align-items: center; gap: 7px; padding: 2px 0; color: var(--text-secondary); }
+.lchart__tip-row b { margin-left: auto; padding-left: 12px; color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.lchart__tip-status { margin-top: 6px !important; padding-top: 6px; border-top: 1px solid var(--hairline); color: var(--text-muted); font-size: 11.5px; }
+.lchart__tip-open { margin-top: 6px; font-size: 12px; }
+.chart-block__hint { margin: 0 0 12px; }
+
+.ctable-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+.ctable { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.ctable th, .ctable td { padding: 9px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--hairline); }
+.ctable thead th { font-size: 11.5px; font-weight: 500; color: var(--text-muted); }
+.ctable th:first-child, .ctable td:first-child { text-align: left; padding-left: 0; }
+.ctable th:last-child, .ctable td:last-child { padding-right: 0; }
+.ctable tbody th { font-weight: 500; color: var(--text-secondary); }
+.ctable tbody tr { cursor: pointer; }
+.ctable tbody tr:hover td, .ctable tbody tr:hover th { background: var(--surface-3); }
+.ctable tbody tr.is-current th { color: var(--text-primary); font-weight: 650; }
+.ctable tbody tr:last-child th, .ctable tbody tr:last-child td { border-bottom: 0; }
+.ctable .badge { font-size: 10px; padding: 2px 7px; }
+.ctable__part { color: var(--text-muted); font-size: 11.5px; }

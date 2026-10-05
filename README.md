@@ -1,9 +1,9 @@
 # Cashflow — Profit Sharing
 
-Aplikasi web sederhana untuk mencatat margin kotor, menghitung share partner per termin, dan melacak pembayaran.
+Aplikasi web sederhana untuk mencatat margin kotor, menghitung share partner per payout, dan melacak pembayaran.
 
-- **Termin 1**: tanggal 1 s/d tanggal batas (default 15) · **Termin 2**: setelahnya s/d akhir bulan
-- Tandai termin sudah dibayar — nominal yang dibayar disimpan, jadi riwayat tidak berubah
+- **Payout 1**: tanggal 1 s/d tanggal batas (default 15) · **Payout 2**: setelahnya s/d akhir bulan
+- Tandai payout sudah dibayar — nominal yang dibayar disimpan, jadi riwayat tidak berubah
 - Grafik cashflow per bulan dengan pilihan rentang (6 bln, 12 bln, tahun ini, semua, atau custom)
 - Tema gelap/terang, export & import backup JSON
 - Login email + password, sinkron antar perangkat lewat Supabase — data dienkripsi di browser (AES-256-GCM, kunci dari PBKDF2) sebelum dikirim

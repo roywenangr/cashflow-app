@@ -57,6 +57,12 @@ export const subscribe = (fn: () => void) => { listeners.add(fn); return () => l
 export const getVersion = () => version;
 function emit() { version++; for (const fn of listeners) fn(); }
 
+// Konfirmasi: UI memasang dialog sendiri lewat setConfirmHandler; tanpa itu pakai confirm() bawaan.
+export type ConfirmOpts = { title?: string; confirmLabel?: string; danger?: boolean };
+let confirmHandler: (msg: string, opts: ConfirmOpts) => Promise<boolean> = async (msg) => confirm(msg);
+export const setConfirmHandler = (fn: typeof confirmHandler) => { confirmHandler = fn; };
+const ask = (msg: string, opts: ConfirmOpts = {}) => confirmHandler(msg, opts);
+
 export function toast(msg: string) {
   store.toast = { msg, id: Date.now() };
   emit();
@@ -108,8 +114,8 @@ export function commit() {
 
 function applyTheme(theme: string) {
   document.documentElement.dataset.theme = theme;
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", theme === "light" ? "#f9f9f7" : "#0d0d0d");
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", theme === "light" ? "#f5f6f9" : "#0f1115"));
 }
 
 // ---------- Sesi di tab ini ----------
@@ -476,7 +482,7 @@ export async function logout() {
     setSync("syncing");
     await Promise.race([runSync(), sleep(5000)]);
   }
-  if (cache.dirty && !confirm("Ada perubahan yang belum terkirim ke cloud. Perubahan tetap tersimpan di perangkat ini dan dikirim saat kamu masuk lagi.\n\nKeluar sekarang?")) return;
+  if (cache.dirty && !(await ask("Ada perubahan yang belum terkirim ke cloud. Perubahan tetap tersimpan di perangkat ini dan dikirim saat kamu masuk lagi. Keluar sekarang?", { title: "Keluar sekarang?", confirmLabel: "Keluar" }))) return;
   if (session) await Promise.race([auth.logout(session.access_token).catch(() => {}), sleep(1500)]);
   forgetSession();
   // Muat ulang halaman supaya data yang sudah didekripsi tidak tersisa di memori.
@@ -599,9 +605,9 @@ export function addEntry(date: string, amount: number, note: string, pctIn: stri
   return true;
 }
 
-export function deleteEntry(id: string) {
+export async function deleteEntry(id: string) {
   const entry = S().entries.find((e) => e.id === id);
-  if (entry && confirm(`Hapus invoice ${fmtRp(entry.amount)} tanggal ${fmtDate(entry.date)}?`)) {
+  if (entry && await ask(`Invoice ${fmtRp(entry.amount)} tanggal ${fmtDate(entry.date)} akan dihapus.`, { title: "Hapus invoice?", confirmLabel: "Hapus", danger: true })) {
     S().entries = S().entries.filter((e) => e.id !== id);
     commit();
     toast("Invoice dihapus");
@@ -616,9 +622,9 @@ export function addSubsidy(termin: Termin, amount: number, purpose: string) {
   return true;
 }
 
-export function deleteSubsidy(id: string) {
+export async function deleteSubsidy(id: string) {
   const x = S().subsidies.find((s) => s.id === id);
-  if (x && confirm(`Hapus subsidi silang ${fmtRp(x.amount)} (Payout ${x.termin})?`)) {
+  if (x && await ask(`Subsidi silang ${fmtRp(x.amount)} (Payout ${x.termin}) akan dihapus.`, { title: "Hapus subsidi silang?", confirmLabel: "Hapus", danger: true })) {
     S().subsidies = S().subsidies.filter((s) => s.id !== id);
     commit();
     toast("Subsidi silang dihapus");
@@ -659,7 +665,7 @@ export async function importBackup(file: File) {
     return;
   }
   const n = data.entries.length;
-  if (!confirm(`Ganti SEMUA data saat ini dengan isi backup (${n} invoice, ${Object.keys(data.payouts).length} pembayaran)?`)) return;
+  if (!(await ask(`Semua data saat ini diganti dengan isi backup (${n} invoice, ${Object.keys(data.payouts).length} pembayaran).`, { title: "Pulihkan backup?", confirmLabel: "Ganti data", danger: true }))) return;
   store.state = data;
   backfillPayoutAmounts(store.state);
   store.viewMonth = today().slice(0, 7);
@@ -667,8 +673,8 @@ export async function importBackup(file: File) {
   toast(`Backup dipulihkan — ${n} invoice`);
 }
 
-export function resetAll() {
-  if (!confirm("Hapus SEMUA data (invoice, riwayat payout, pengaturan) di SEMUA perangkat yang memakai akun ini? Tindakan ini tidak bisa dibatalkan.")) return;
+export async function resetAll() {
+  if (!(await ask("Semua invoice, riwayat payout, bukti transfer & pengaturan dihapus di SEMUA perangkat yang memakai akun ini. Tindakan ini tidak bisa dibatalkan.", { title: "Reset semua data?", confirmLabel: "Hapus semua", danger: true }))) return;
   store.state = defaults();
   partnerPublished = null;
   store.viewMonth = today().slice(0, 7);
@@ -744,8 +750,8 @@ export async function payWithProof(ym: string, t: number, blob: Blob) {
   openWa(terminKey(ym, t));
 }
 
-export function unmarkPaid(ym: string, t: number) {
-  if (!confirm(`Batalkan tanda bayar Payout ${t} bulan ${monthLabel(ym)}? Catatan pembayaran akan dihapus dari riwayat.`)) return;
+export async function unmarkPaid(ym: string, t: number) {
+  if (!(await ask(`Catatan pembayaran Payout ${t} ${monthLabel(ym)} beserta bukti transfernya akan dihapus dari riwayat.`, { title: "Batalkan tanda bayar?", confirmLabel: "Batalkan pembayaran", danger: true }))) return;
   const key = terminKey(ym, t);
   const prev = S().payouts[key];
   delete S().payouts[key];
@@ -858,7 +864,7 @@ export async function setPartnerPassword(pwIn: string) {
 }
 
 export async function disablePartner() {
-  if (!confirm("Matikan akses partner? Partner tidak akan bisa masuk lagi sampai kamu membuat password baru.")) return false;
+  if (!(await ask("Partner tidak akan bisa masuk lagi sampai kamu membuat password baru.", { title: "Matikan akses partner?", confirmLabel: "Matikan", danger: true }))) return false;
   try {
     if (getSession()) await remote.deletePartnerView();
   } catch (e) {

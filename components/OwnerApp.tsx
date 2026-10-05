@@ -5,7 +5,7 @@ import { start } from "@/lib/store";
 import LockScreen from "./LockScreen";
 import Dashboard from "./Dashboard";
 import { ConflictDialog } from "./dialogs";
-import { Toast, useStore } from "./ui";
+import { AppToaster, useStore } from "./common";
 
 export default function OwnerApp() {
   const s = useStore();
@@ -15,7 +15,7 @@ export default function OwnerApp() {
     <>
       {s.unlocked ? <Dashboard /> : <LockScreen key={`${s.lock.mode}|${s.lock.error}|${s.lock.info}`} />}
       <ConflictDialog />
-      <Toast />
+      <AppToaster />
     </>
   );
 }

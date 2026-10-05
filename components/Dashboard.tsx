@@ -2,411 +2,440 @@
 
 import { useRef, useState } from "react";
 import {
-  addEntry, addSubsidy, deleteEntry, deleteSubsidy, exportBackup, importBackup, logout, resetAll, setViewMonth,
-  syncText, toggleTheme, unmarkPaid, waUrl,
+  CalendarDays, ChartLine, ChevronLeft, ChevronRight, CircleCheck, Download, FileText, HandCoins, History, KeyRound,
+  LayoutDashboard, LogOut, MessageCircle, MoreHorizontal, Plus, Receipt, Settings, Trash2, Undo2, Upload, Wallet,
+} from "lucide-react";
+import {
+  deleteEntry, deleteSubsidy, exportBackup, importBackup, logout, resetAll, setViewMonth, syncText, unmarkPaid, waUrl,
 } from "@/lib/store";
 import {
   dashPeriod, entryShare, fmtDate, fmtPct, fmtRp, monthEntries, monthLabel, pctLabel, shiftMonth, State, Termin,
-  terminEntries, terminKey, terminOf, terminPeriod, terminTotals, today, type TerminTotals,
+  terminEntries, terminKey, terminOf, terminPeriod, terminTotals, today,
 } from "@/lib/model";
-import { Icon, useStore } from "./ui";
-import ChartOverlay from "./ChartOverlay";
-import { PasswordDialog, ProofDialog, ProofViewDialog, SettingsDialog, WaDialog } from "./dialogs";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Brand, EmptyState, Section, StatusBadge, ThemeButton, useStore } from "./common";
+import Analytics from "./Analytics";
+import SettingsSheet from "./SettingsSheet";
+import { AddInvoiceDialog, AddSubsidyDialog, PasswordDialog, ProofDialog, ProofViewDialog, WaDialog } from "./dialogs";
 
 export default function Dashboard() {
   const s = useStore();
+  const [tab, setTab] = useState("overview");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
-  const [chartOpen, setChartOpen] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [subsidyOpen, setSubsidyOpen] = useState(false);
   const [payTarget, setPayTarget] = useState<null | { ym: string; t: number; msg: string }>(null);
   const [proofKey, setProofKey] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="topbar__brand">
-          <span className="topbar__logo" aria-hidden="true">Rp</span>
-          <div>
-            <h1>Cashflowshit App</h1>
-            <p className="topbar__sub">Profit Sharing - Made with &lt;3</p>
+    <TooltipProvider delayDuration={200}>
+      <Tabs value={tab} onValueChange={setTab} className="min-h-dvh gap-0">
+        <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-lg">
+          <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4 sm:px-6">
+            <Brand sub="Profit Sharing - Made with <3" />
+            <TabsList className="mx-auto hidden md:flex">
+              <TabsTrigger value="overview"><LayoutDashboard /> Ringkasan</TabsTrigger>
+              <TabsTrigger value="analytics"><ChartLine /> Analitik</TabsTrigger>
+            </TabsList>
+            <div className="ml-auto flex items-center gap-1 md:ml-0">
+              <SyncDot />
+              <ThemeButton />
+              <Button variant="ghost" size="icon-lg" aria-label="Pengaturan" title="Pengaturan" onClick={() => setSettingsOpen(true)}><Settings /></Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-lg" aria-label="Akun">
+                    <span className="grid size-7 place-items-center rounded-full bg-primary/15 text-xs font-semibold text-primary uppercase">{(s.accountEmail || "?")[0]}</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-60">
+                  <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{s.accountEmail || "—"}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setPwOpen(true)}><KeyRound /> Ganti password</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={exportBackup}><Download /> Export backup (JSON)</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => fileRef.current?.click()}><Upload /> Import backup</DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onSelect={() => resetAll()}><Trash2 /> Reset semua data</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => logout()}><LogOut /> Keluar</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
-        </div>
-        <div className="topbar__actions">
-          <button className="icon-btn" aria-label="Grafik cashflow" title="Grafik cashflow" onClick={() => setChartOpen(true)}><Icon.chart /></button>
-          <button className="icon-btn" aria-label="Pengaturan" title="Pengaturan" onClick={() => setSettingsOpen(true)}><Icon.settings /></button>
-          <button className="icon-btn" aria-label="Keluar" title="Keluar" onClick={() => logout()}><Icon.lock /></button>
-          <button className="icon-btn" aria-label="Ganti tema" title="Ganti tema" onClick={toggleTheme}><Icon.moon /><Icon.sun /></button>
-        </div>
-      </header>
+          <div className="px-4 pb-3 md:hidden">
+            <TabsList className="w-full">
+              <TabsTrigger value="overview"><LayoutDashboard /> Ringkasan</TabsTrigger>
+              <TabsTrigger value="analytics"><ChartLine /> Analitik</TabsTrigger>
+            </TabsList>
+          </div>
+        </header>
 
-      <main>
-        <Kpi s={s.state} ym={s.viewMonth} />
+        <main className="mx-auto w-full max-w-6xl px-4 pt-5 pb-10 sm:px-6">
+          <TabsContent value="overview">
+            <Overview s={s.state} ym={s.viewMonth}
+              onAddInvoice={() => setInvoiceOpen(true)} onAddSubsidy={() => setSubsidyOpen(true)}
+              onPay={(t, msg) => setPayTarget({ ym: s.viewMonth, t, msg })} onProofs={setProofKey} />
+          </TabsContent>
+          <TabsContent value="analytics">
+            <Analytics onOpenMonth={(ym) => { setViewMonth(ym); setTab("overview"); }} />
+          </TabsContent>
+        </main>
 
-        <nav className="month-nav" aria-label="Pilih bulan">
-          <button className="icon-btn" aria-label="Bulan sebelumnya" onClick={() => setViewMonth(shiftMonth(s.viewMonth, -1))}><Icon.prev /></button>
-          <h2 className="month-nav__title">{monthLabel(s.viewMonth)}</h2>
-          <button className="icon-btn" aria-label="Bulan berikutnya" onClick={() => setViewMonth(shiftMonth(s.viewMonth, 1))}><Icon.next /></button>
-          <button className="btn btn--ghost btn--today" onClick={() => setViewMonth(today().slice(0, 7))}>Hari ini</button>
-        </nav>
+        <footer className="mx-auto max-w-6xl px-4 pb-8 text-center text-xs text-muted-foreground sm:px-6">
+          Data dienkripsi di perangkat ini sebelum dikirim ke cloud.
+        </footer>
+      </Tabs>
 
-        <section className="termins" aria-label="Payout bulan ini">
-          {([1, 2] as const).map((t) => (
-            <PayoutCard key={t} s={s.state} ym={s.viewMonth} t={t}
-              onPay={(msg) => setPayTarget({ ym: s.viewMonth, t, msg })}
-              onProofs={() => setProofKey(terminKey(s.viewMonth, t))} />
-          ))}
-        </section>
-
-        <EntryForm s={s.state} ym={s.viewMonth} />
-        <EntryList s={s.state} ym={s.viewMonth} />
-        <SubsidyCard s={s.state} ym={s.viewMonth} />
-        <History s={s.state} onProofs={setProofKey} />
-      </main>
-
-      <Footer />
-
-      <ChartOverlay open={chartOpen} onClose={() => setChartOpen(false)} />
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)}
-        onChangePw={() => { setSettingsOpen(false); setPwOpen(true); }} />
-      <PasswordDialog open={pwOpen} onClose={() => setPwOpen(false)} />
+      <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => {
+        const f = e.target.files?.[0];
+        e.target.value = ""; // supaya file yang sama bisa dipilih lagi
+        if (f) importBackup(f);
+      }} />
+      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} onChangePw={() => { setSettingsOpen(false); setPwOpen(true); }} />
+      <PasswordDialog open={pwOpen} onOpenChange={setPwOpen} />
+      <AddInvoiceDialog open={invoiceOpen} onOpenChange={setInvoiceOpen} />
+      <AddSubsidyDialog open={subsidyOpen} onOpenChange={setSubsidyOpen} />
       <ProofDialog target={payTarget} onClose={() => setPayTarget(null)} />
       <ProofViewDialog payoutKey={proofKey} onClose={() => setProofKey(null)} />
       <WaDialog />
+    </TooltipProvider>
+  );
+}
+
+function SyncDot() {
+  const s = useStore();
+  const st = s.sync.state;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} aria-label={syncText()} className="grid size-9 place-items-center rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+          <span className={cn("size-2.5 rounded-full",
+            st === "synced" && "bg-success",
+            st === "syncing" && "animate-pulse bg-primary",
+            (st === "offline" || st === "conflict") && "bg-warning",
+            st === "error" && "bg-destructive",
+            st === "idle" && "bg-muted-foreground/40")} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{syncText()}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// ---------- Ringkasan ----------
+
+function Overview({ s, ym, onAddInvoice, onAddSubsidy, onPay, onProofs }: {
+  s: State; ym: string; onAddInvoice: () => void; onAddSubsidy: () => void;
+  onPay: (t: Termin, msg: string) => void; onProofs: (key: string) => void;
+}) {
+  const isThisMonth = ym === today().slice(0, 7);
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex items-center justify-between gap-1 rounded-xl border bg-card p-1 shadow-xs sm:justify-start">
+          <Button variant="ghost" size="icon-lg" aria-label="Bulan sebelumnya" onClick={() => setViewMonth(shiftMonth(ym, -1))}><ChevronLeft /></Button>
+          <h1 className="min-w-36 text-center text-[15px] font-semibold tracking-tight capitalize">{monthLabel(ym)}</h1>
+          <Button variant="ghost" size="icon-lg" aria-label="Bulan berikutnya" onClick={() => setViewMonth(shiftMonth(ym, 1))}><ChevronRight /></Button>
+        </div>
+        {!isThisMonth && (
+          <Button variant="outline" size="lg" onClick={() => setViewMonth(today().slice(0, 7))}><CalendarDays /> Bulan ini</Button>
+        )}
+        <div className="grid grid-cols-2 gap-2 sm:ml-auto sm:flex">
+          <Button variant="outline" size="lg" className="h-10 sm:h-9" onClick={onAddSubsidy}><HandCoins /> Subsidi silang</Button>
+          <Button size="lg" className="h-10 sm:h-9" onClick={onAddInvoice}><Plus /> Tambah invoice</Button>
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Hero s={s} ym={ym} />
+        <PaymentStatus s={s} ym={ym} />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        {([1, 2] as const).map((t) => (
+          <PayoutCard key={t} s={s} ym={ym} t={t} onPay={(msg) => onPay(t, msg)} onProofs={() => onProofs(terminKey(ym, t))} />
+        ))}
+      </div>
+
+      <div className="grid items-start gap-4 lg:grid-cols-3">
+        <Invoices s={s} ym={ym} onAdd={onAddInvoice} className="lg:col-span-2" />
+        <div className="space-y-4">
+          <Subsidies s={s} ym={ym} onAdd={onAddSubsidy} />
+          <PayoutHistory s={s} onProofs={onProofs} />
+        </div>
+      </div>
     </div>
   );
 }
 
-function Kpi({ s, ym }: { s: State; ym: string }) {
-  const isThisMonth = ym === today().slice(0, 7);
+function Hero({ s, ym }: { s: State; ym: string }) {
   const entries = monthEntries(s, ym);
-  const t1 = terminTotals(s, ym, 1);
-  const t2 = terminTotals(s, ym, 2);
+  const t1 = terminTotals(s, ym, 1), t2 = terminTotals(s, ym, 2);
   const profit = t1.profit + t2.profit;
   const share = t1.share + t2.share;
   const subsidy = t1.subsidy + t2.subsidy;
-  const paid = t1.paidAmount + t2.paidAmount;
-  const due = t1.remaining + t2.remaining;
-  const net = profit - share; // profit bersih = margin kotor − share partner
-  const settledCount = (t1.settled && t1.share > 0 ? 1 : 0) + (t2.settled && t2.share > 0 ? 1 : 0);
-  const dueCount = (t1.remaining > 0 ? 1 : 0) + (t2.remaining > 0 ? 1 : 0);
-  const scope = isThisMonth ? "Bulan ini" : monthLabel(ym);
   const label = pctLabel(s, entries);
-  let shareMeta = label === "campuran"
-    ? `Rata-rata ${fmtPct(profit ? Math.round((share / profit) * 1000) / 10 : 0)}`
-    : `${label} dari margin kotor`;
-  if (subsidy > 0) shareMeta += ` · subsidi silang −${fmtRp(subsidy)}`;
+  const pct = label === "campuran" ? `rata-rata ${fmtPct(profit ? Math.round((share / profit) * 1000) / 10 : 0)}` : label;
 
   return (
-    <section className="tiles" aria-label="Ringkasan bulan ini">
-      <div className="tile">
-        <p className="tile__label"><span className="tile__dot"></span>Margin kotor bulan ini</p>
-        <p className="tile__value">{fmtRp(profit)}</p>
-        <p className="tile__meta">{entries.length} Invoice · {scope}</p>
+    <div className="bg-hero relative overflow-hidden rounded-2xl p-6 text-white shadow-sm lg:col-span-2">
+      <div className="pointer-events-none absolute -top-24 -right-16 size-72 rounded-full bg-white/10 blur-3xl" />
+      <div className="relative">
+        <p className="flex items-center gap-2 text-sm text-white/75"><Wallet className="size-4" /> Profit bersih kamu · <span className="capitalize">{monthLabel(ym)}</span></p>
+        <p className="tnum mt-2 text-4xl font-semibold tracking-tight sm:text-5xl">{fmtRp(profit - share)}</p>
+        <p className="mt-1 text-sm text-white/70">Margin kotor − share partner · {entries.length} invoice</p>
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <HeroStat label="Margin kotor" value={fmtRp(profit)} />
+          <HeroStat label={`Share partner (${pct})`} value={fmtRp(share)} />
+          <HeroStat label="Subsidi silang" value={subsidy ? "−" + fmtRp(subsidy) : "—"} className="col-span-2 sm:col-span-1" />
+        </div>
       </div>
-      <div className="tile">
-        <p className="tile__label"><span className="tile__dot tile__dot--accent"></span>Share partner bulan ini</p>
-        <p className="tile__value tile__value--accent">{fmtRp(share)}</p>
-        <p className="tile__meta">{shareMeta}</p>
+    </div>
+  );
+}
+
+function HeroStat({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <div className={cn("rounded-xl bg-white/10 px-3.5 py-3 ring-1 ring-white/10 backdrop-blur", className)}>
+      <p className="truncate text-xs text-white/70">{label}</p>
+      <p className="tnum mt-0.5 truncate text-[15px] font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function PaymentStatus({ s, ym }: { s: State; ym: string }) {
+  const t1 = terminTotals(s, ym, 1), t2 = terminTotals(s, ym, 2);
+  const payable = t1.payable + t2.payable;
+  const paid = t1.paidAmount + t2.paidAmount;
+  const due = t1.remaining + t2.remaining;
+  const pct = payable ? Math.min(100, Math.round((Math.min(paid, payable) / payable) * 100)) : 0;
+  const row = (t: number, tt: typeof t1) => {
+    const empty = tt.share === 0 && !tt.paid;
+    return (
+      <div className="flex items-center justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">Payout {t}</span>
+        {empty ? <StatusBadge tone="neutral">Kosong</StatusBadge>
+          : tt.settled ? <StatusBadge tone="paid">Lunas</StatusBadge>
+          : tt.paid ? <StatusBadge tone="partial">Kurang {fmtRp(tt.remaining)}</StatusBadge>
+          : <StatusBadge tone="due">{fmtRp(tt.remaining)}</StatusBadge>}
       </div>
-      <div className="tile">
-        <p className="tile__label"><span className="tile__dot tile__dot--good"></span>Profit bersih bulan ini</p>
-        <p className="tile__value tile__value--good">{fmtRp(net)}</p>
-        <p className="tile__meta">Margin kotor − share partner</p>
+    );
+  };
+  return (
+    <div className="flex flex-col rounded-2xl border bg-card p-5 shadow-xs">
+      <p className="text-sm font-medium text-muted-foreground">Pembayaran ke {s.settings.partnerName}</p>
+      <p className="tnum mt-2 text-2xl font-semibold tracking-tight">{fmtRp(paid)}<span className="text-base font-normal text-muted-foreground"> / {fmtRp(payable)}</span></p>
+      <Progress value={pct} className="mt-3 h-2" />
+      <p className="mt-2 text-xs text-muted-foreground">
+        {payable === 0 ? "Belum ada tagihan bulan ini" : due > 0 ? <>Belum dibayar <b className="tnum font-semibold text-warning-ink">{fmtRp(due)}</b></> : "Semua payout bulan ini lunas"}
+      </p>
+      <div className="mt-auto space-y-2.5 border-t pt-4">
+        {row(1, t1)}
+        {row(2, t2)}
       </div>
-      <div className="tile">
-        <p className="tile__label"><span className="tile__dot tile__dot--good"></span>Sudah dibayar (bulan ini)</p>
-        <p className="tile__value tile__value--good">{fmtRp(paid)}</p>
-        <p className="tile__meta">{paid > 0 ? `${settledCount} dari 2 payout lunas` : "Belum ada payout lunas"}</p>
-      </div>
-      <div className="tile tile--wide">
-        <p className="tile__label"><span className="tile__dot tile__dot--warn"></span>Belum dibayar (bulan ini)</p>
-        <p className="tile__value tile__value--due">{fmtRp(due)}</p>
-        <p className="tile__meta">{due > 0 ? `${dueCount} payout menunggu` : share > 0 ? "Semua lunas" : "Belum ada tagihan"}</p>
-      </div>
-    </section>
+    </div>
   );
 }
 
 function PayoutCard({ s, ym, t, onPay, onProofs }: {
   s: State; ym: string; t: Termin; onPay: (msg: string) => void; onProofs: () => void;
 }) {
-  const totals: TerminTotals = terminTotals(s, ym, t);
+  const tt = terminTotals(s, ym, t);
   const key = terminKey(ym, t);
   const payout = s.payouts[key];
-  const empty = totals.profit === 0;
-  const covered = !empty && !totals.paid && totals.share > 0 && totals.payable === 0; // share habis untuk subsidi
-  const partial = totals.paid && totals.remaining > 0;
-  const cls = "termin" +
-    (totals.settled && !empty ? " termin--paid" : "") +
-    (totals.remaining > 0 ? " termin--due" : "") +
-    (empty && !totals.paid ? " termin--empty" : "");
+  const period = terminPeriod(s, ym, t);
+  const empty = tt.profit === 0;
+  const covered = !empty && !tt.paid && tt.share > 0 && tt.payable === 0; // share habis untuk subsidi
+  const partial = tt.paid && tt.remaining > 0;
+  const progress = tt.payable ? Math.min(100, Math.round((Math.min(tt.paidAmount, tt.payable) / tt.payable) * 100)) : tt.settled ? 100 : 0;
 
-  const pay = () => onPay(totals.paid
-    ? `Sisa Payout ${t} bulan ${monthLabel(ym)} sebesar ${fmtRp(totals.remaining)} (total menjadi ${fmtRp(totals.payable)}).`
-    : `Payout ${t} bulan ${monthLabel(ym)} sebesar ${fmtRp(totals.payable)}.`);
+  const pay = () => onPay(tt.paid
+    ? `Sisa Payout ${t} bulan ${monthLabel(ym)} sebesar ${fmtRp(tt.remaining)} (total menjadi ${fmtRp(tt.payable)}).`
+    : `Payout ${t} bulan ${monthLabel(ym)} sebesar ${fmtRp(tt.payable)}.`);
 
-  const paidNote = totals.paid && (
-    <p className="termin__note">
-      Dibayar {fmtRp(totals.paidAmount)} · {fmtDate(totals.paidAt!)}
-      {totals.overpaid > 0 && ` · lebih bayar ${fmtRp(totals.overpaid)}`}
-      {totals.proofCount > 0 && <> · <button type="button" className="link-btn" onClick={onProofs}>
-        Lihat bukti{totals.proofCount > 1 ? ` (${totals.proofCount})` : ""}</button></>}
-      {payout?.share && <> · <a className="link-btn" href={waUrl(key)} target="_blank" rel="noopener">Kirim WA</a></>}
-    </p>
-  );
+  const label = partial ? "Sisa perlu ditransfer" : tt.paid ? "Sudah ditransfer" : covered ? "Tertutup subsidi silang" : empty ? "Belum ada invoice" : "Perlu ditransfer";
+  const amount = partial ? tt.remaining : tt.paid ? tt.paidAmount : tt.payable;
 
   return (
-    <article className={cls}>
-      <div className="termin__head">
+    <article className={cn("flex flex-col rounded-2xl border bg-card shadow-xs", tt.remaining > 0 && "ring-1 ring-warning/30")}>
+      <div className="flex items-start justify-between gap-3 px-5 pt-5">
         <div>
-          <p className="termin__name" style={{ margin: 0 }}>Payout {t}</p>
-          <p className="termin__period" style={{ margin: "2px 0 0" }}>{terminPeriod(s, ym, t)}</p>
+          <h3 className="text-[15px] font-semibold tracking-tight">Payout {t}</h3>
+          <p className="text-xs text-muted-foreground">Tanggal {period}</p>
         </div>
-        {totals.settled && !(empty && !totals.paid)
-          ? <span className="badge badge--paid"><span className="badge__dot"></span>Paid</span>
-          : partial
-            ? <span className="badge badge--unpaid"><span className="badge__dot"></span>Kurang</span>
-            : <span className="badge badge--unpaid"><span className="badge__dot"></span>Unpaid</span>}
+        {empty && !tt.paid ? <StatusBadge tone="neutral">Kosong</StatusBadge>
+          : tt.settled ? <StatusBadge tone="paid">Lunas</StatusBadge>
+          : partial ? <StatusBadge tone="partial">Kurang bayar</StatusBadge>
+          : <StatusBadge tone="due">Belum dibayar</StatusBadge>}
       </div>
-      <div className="termin__figures">
-        <div className="figure">
-          <span className="figure__label">Margin Kotor (Tgl {dashPeriod(terminPeriod(s, ym, t))})</span>
-          <span className="figure__value">{fmtRp(totals.profit)}</span>
-        </div>
-        <div className="figure">
-          <span className="figure__label">Share partner ({pctLabel(s, terminEntries(s, ym, t))})</span>
-          <span className="figure__value">{fmtRp(totals.share)}</span>
-        </div>
-        {totals.subsidy > 0 && (
-          <div className="figure">
-            <span className="figure__label">Subsidi silang</span>
-            <span className="figure__value figure__value--neg">−{fmtRp(totals.subsidy)}</span>
-          </div>
-        )}
-        <div className="figure">
-          <span className="figure__label">Profit bersih kamu</span>
-          <span className="figure__value">{fmtRp(totals.profit - totals.share)}</span>
-        </div>
-      </div>
-      <div className="termin__share">
-        <p className="termin__share-label">
-          <span className={"tile__dot " + (totals.paid ? "tile__dot--good" : "tile__dot--warn")}></span>
-          {partial ? "Sisa perlu ditransfer" : totals.paid ? "Sudah ditransfer" : covered ? "Tertutup subsidi silang" : "Perlu ditransfer"}
+
+      <div className="px-5 pt-4">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className={cn("tnum mt-0.5 text-3xl font-semibold tracking-tight", empty && !tt.paid && "text-muted-foreground/60")}>
+          {empty && !tt.paid ? "—" : fmtRp(amount)}
         </p>
-        <p className="termin__share-value">
-          {partial ? fmtRp(totals.remaining) : totals.paid ? fmtRp(totals.paidAmount) : empty ? "—" : fmtRp(totals.payable)}
-        </p>
+        {tt.payable > 0 && <Progress value={progress} className="mt-3 h-1.5" />}
       </div>
-      <div className="termin__foot">
-        {partial ? (
-          <>
-            <button className="btn btn--primary btn--block" onClick={pay}>Tandai sisa dibayar</button>
-            <button className="btn btn--ghost btn--block" onClick={() => unmarkPaid(ym, t)}>Batalkan tanda bayar</button>
-            {paidNote}
-          </>
-        ) : totals.paid ? (
-          <>
-            <button className="btn btn--ghost btn--block" onClick={() => unmarkPaid(ym, t)}>Batalkan tanda lunas</button>
-            {paidNote}
-          </>
-        ) : covered ? (
-          <p className="termin__note">Share tertutup subsidi silang — tidak ada yang perlu ditransfer</p>
-        ) : empty ? (
-          <p className="termin__note">Belum ada invoice di periode ini</p>
-        ) : (
-          <button className="btn btn--primary btn--block" onClick={pay}>Tandai sudah dibayar</button>
+
+      <dl className="mx-5 mt-4 space-y-2 border-t pt-4 text-sm">
+        <Row label={`Margin kotor (Tgl ${dashPeriod(period)})`} value={fmtRp(tt.profit)} />
+        <Row label={`Share partner (${pctLabel(s, terminEntries(s, ym, t))})`} value={fmtRp(tt.share)} />
+        {tt.subsidy > 0 && <Row label="Subsidi silang" value={"−" + fmtRp(tt.subsidy)} valueClass="text-warning-ink" />}
+        <Row label="Profit bersih kamu" value={fmtRp(tt.profit - tt.share)} strong />
+      </dl>
+
+      <div className="mt-auto space-y-3 p-5">
+        {tt.paid && (
+          <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <CircleCheck className="size-3.5 text-success" />
+            Dibayar {fmtRp(tt.paidAmount)} · {fmtDate(tt.paidAt!)}
+            {tt.overpaid > 0 && <span className="text-warning-ink">· lebih bayar {fmtRp(tt.overpaid)}</span>}
+          </p>
         )}
+        {covered && <p className="text-xs text-muted-foreground">Share tertutup subsidi silang — tidak ada yang perlu ditransfer.</p>}
+        <div className="flex flex-wrap gap-2">
+          {!tt.paid && !empty && !covered && <Button size="lg" className="flex-1" onClick={pay}><Receipt /> Tandai sudah dibayar</Button>}
+          {partial && <Button size="lg" className="flex-1" onClick={pay}><Receipt /> Tandai sisa dibayar</Button>}
+          {tt.paid && tt.proofCount > 0 && (
+            <Button variant="outline" size="lg" className="flex-1" onClick={onProofs}><FileText /> Bukti{tt.proofCount > 1 ? ` (${tt.proofCount})` : ""}</Button>
+          )}
+          {payout?.share && (
+            <Button asChild variant="outline" size="lg" className="flex-1">
+              <a href={waUrl(key)} target="_blank" rel="noopener"><MessageCircle /> Kirim WA</a>
+            </Button>
+          )}
+          {tt.paid && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon-lg" aria-label="Opsi lain"><MoreHorizontal /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onSelect={() => unmarkPaid(ym, t)}><Undo2 /> Batalkan tanda bayar</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </div>
     </article>
   );
 }
 
-function EntryForm({ s, ym }: { s: State; ym: string }) {
-  const [dateIn, setDate] = useState("");
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
-  const [pctIn, setPct] = useState<string | null>(null); // null = ikut default di Pengaturan
-
-  // Default tanggal: hari ini saat melihat bulan aktif, tanggal 1 untuk bulan lain.
-  // Tanggal pilihan dipertahankan selama masih di bulan yang sedang dilihat.
-  const date = dateIn && dateIn.startsWith(ym + "-") ? dateIn : ym === today().slice(0, 7) ? today() : `${ym}-01`;
-  const pct = pctIn ?? String(s.settings.sharePct);
-
+function Row({ label, value, strong, valueClass }: { label: string; value: string; strong?: boolean; valueClass?: string }) {
   return (
-    <section className="card form-card" aria-label="Tambah Invoice">
-      <h3 className="card__title">Tambah Invoice</h3>
-      <form className="form" onSubmit={(e) => {
-        e.preventDefault();
-        if (addEntry(date, Math.round(Number(amount)), note.trim(), pct.trim())) {
-          setAmount(""); setNote(""); setPct(null); // balik ke default
-        }
-      }}>
-        <div className="form__row">
-          <label className="field">
-            <span>Tanggal</span>
-            <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
-          </label>
-          <label className="field field--grow">
-            <span>Jumlah (Rp)</span>
-            <input type="number" inputMode="numeric" min="0" step="any" placeholder="0" required value={amount} onChange={(e) => setAmount(e.target.value)} />
-          </label>
-        </div>
-        <div className="form__row">
-          <label className="field field--grow">
-            <span>Catatan <em>(opsional)</em></span>
-            <input type="text" maxLength={80} placeholder="mis. Proyek A, client X…" value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
-          <label className="field field--pct">
-            <span>Share (%)</span>
-            <input type="number" inputMode="decimal" min="0" max="100" step="0.5" value={pct} onChange={(e) => setPct(e.target.value)} />
-          </label>
-          <button type="submit" className="btn btn--primary">Simpan</button>
-        </div>
-      </form>
-    </section>
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={cn("tnum font-medium", strong && "font-semibold", valueClass)}>{value}</dd>
+    </div>
   );
 }
 
-function EntryList({ s, ym }: { s: State; ym: string }) {
+function Invoices({ s, ym, onAdd, className }: { s: State; ym: string; onAdd: () => void; className?: string }) {
   const entries = monthEntries(s, ym);
+  const total = entries.reduce((sum, e) => sum + e.amount, 0);
   return (
-    <section className="card" aria-label="Daftar invoice bulan ini">
-      <div className="card__head">
-        <h3 className="card__title">Invoice Bulan Ini</h3>
-        <span className="chip">{entries.length} Invoice</span>
-      </div>
-      <ul className="entries">
-        {entries.map((e) => (
-          <li key={e.id} className="entry">
-            <span className="entry__date">{fmtDate(e.date)}</span>
-            <div className="entry__body">
-              <span className="entry__amount">{fmtRp(e.amount)}</span>
-              {e.note && <span className="entry__note">{e.note}</span>}
-              <span className="entry__share">Share {fmtPct(e.sharePct)} · {fmtRp(entryShare(e))}</span>
-            </div>
-            <div className="entry__side">
-              <span className="entry__tag">Payout {terminOf(s, e.date)}</span>
-              <button className="del-btn" aria-label="Hapus invoice" onClick={() => deleteEntry(e.id)}><Icon.trash /></button>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="empty" hidden={entries.length > 0}>Belum ada invoice tercatat bulan ini.</p>
-    </section>
+    <Section className={className}
+      title={<span className="flex items-center gap-2">Invoice bulan ini <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{entries.length} Invoice</span></span>}
+      action={<Button variant="ghost" size="sm" onClick={onAdd}><Plus /> Tambah</Button>}>
+      {entries.length === 0 ? (
+        <EmptyState icon={<Receipt />} title="Belum ada invoice tercatat bulan ini">Tambahkan invoice untuk menghitung share partner otomatis.</EmptyState>
+      ) : (
+        <>
+          <ul className="divide-y border-t">
+            {entries.map((e) => {
+              const [y, m, d] = e.date.split("-").map(Number);
+              return (
+                <li key={e.id} className="flex items-center gap-3 px-5 py-3">
+                  <div className="grid w-11 shrink-0 place-items-center rounded-lg bg-muted py-1.5 leading-none">
+                    <span className="tnum text-base font-semibold">{d}</span>
+                    <span className="mt-0.5 text-[10px] text-muted-foreground uppercase">{new Date(y, m - 1, d).toLocaleDateString("id-ID", { month: "short" })}</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="tnum text-[15px] font-semibold">{fmtRp(e.amount)}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {e.note || "Tanpa catatan"} · Share {fmtPct(e.sharePct)} = {fmtRp(entryShare(e))}
+                    </p>
+                  </div>
+                  <span className="hidden shrink-0 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground sm:inline">Payout {terminOf(s, e.date)}</span>
+                  <Button variant="ghost" size="icon" aria-label="Hapus invoice" className="text-muted-foreground hover:text-destructive"
+                    onClick={() => deleteEntry(e.id)}><Trash2 /></Button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex justify-between border-t px-5 py-3 text-sm">
+            <span className="text-muted-foreground">Total margin kotor</span>
+            <span className="tnum font-semibold">{fmtRp(total)}</span>
+          </div>
+        </>
+      )}
+    </Section>
   );
 }
 
-function SubsidyCard({ s, ym }: { s: State; ym: string }) {
-  const [termin, setTermin] = useState<Termin>(1);
-  const [amount, setAmount] = useState("");
-  const [purpose, setPurpose] = useState("");
+function Subsidies({ s, ym, onAdd }: { s: State; ym: string; onAdd: () => void }) {
   const list = s.subsidies.filter((x) => x.ym === ym).sort((a, b) => a.termin - b.termin);
   const total = list.reduce((sum, x) => sum + x.amount, 0);
-
   return (
-    <section className="card form-card" aria-label="Subsidi silang">
-      <div className="card__head">
-        <h3 className="card__title">Subsidi Silang</h3>
-        <span className="chip">{list.length ? `${fmtRp(total)} bulan ini` : "—"}</span>
-      </div>
-      <form className="form" noValidate onSubmit={(e) => {
-        e.preventDefault();
-        if (addSubsidy(termin, Math.round(Number(amount)), purpose.trim())) { setAmount(""); setPurpose(""); }
-      }}>
-        <div className="form__row">
-          <label className="field field--pct">
-            <span>Payout</span>
-            <select value={termin} onChange={(e) => setTermin(Number(e.target.value) === 2 ? 2 : 1)}>
-              <option value="1">Payout 1</option>
-              <option value="2">Payout 2</option>
-            </select>
-          </label>
-          <label className="field field--grow">
-            <span>Jumlah (Rp)</span>
-            <input type="number" inputMode="numeric" min="0" step="any" placeholder="0" required value={amount} onChange={(e) => setAmount(e.target.value)} />
-          </label>
-        </div>
-        <div className="form__row">
-          <label className="field field--grow">
-            <span>Keperluan</span>
-            <input type="text" maxLength={80} placeholder="mis. Bantu biaya proyek B…" required value={purpose} onChange={(e) => setPurpose(e.target.value)} />
-          </label>
-          <button type="submit" className="btn btn--primary">Simpan</button>
-        </div>
-        <small className="form__hint">Dipotong dari share partner pada payout yang dipilih (bulan yang sedang dilihat).</small>
-      </form>
-      <ul className="entries subsidies">
-        {list.map((x) => (
-          <li key={x.id} className="entry">
-            <div className="entry__body">
-              <span className="entry__amount">−{fmtRp(x.amount)}</span>
-              <span className="entry__note">{x.purpose}</span>
-            </div>
-            <div className="entry__side">
-              <span className="entry__tag">Payout {x.termin}</span>
-              <button className="del-btn" aria-label="Hapus subsidi silang" onClick={() => deleteSubsidy(x.id)}><Icon.trash /></button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
+    <Section title="Subsidi silang" action={<Button variant="ghost" size="sm" onClick={onAdd}><Plus /> Tambah</Button>}>
+      {list.length === 0 ? (
+        <EmptyState icon={<HandCoins />} title="Tidak ada subsidi silang">Potongan dari share partner untuk keperluan bersama.</EmptyState>
+      ) : (
+        <>
+          <ul className="divide-y border-t">
+            {list.map((x) => (
+              <li key={x.id} className="flex items-center gap-3 px-5 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="tnum text-sm font-semibold">−{fmtRp(x.amount)}</p>
+                  <p className="truncate text-xs text-muted-foreground">{x.purpose} · Payout {x.termin}</p>
+                </div>
+                <Button variant="ghost" size="icon" aria-label="Hapus subsidi silang" className="text-muted-foreground hover:text-destructive"
+                  onClick={() => deleteSubsidy(x.id)}><Trash2 /></Button>
+              </li>
+            ))}
+          </ul>
+          <div className="flex justify-between border-t px-5 py-3 text-sm">
+            <span className="text-muted-foreground">Total bulan ini</span>
+            <span className="tnum font-semibold">−{fmtRp(total)}</span>
+          </div>
+        </>
+      )}
+    </Section>
   );
 }
 
-function History({ s, onProofs }: { s: State; onProofs: (key: string) => void }) {
+function PayoutHistory({ s, onProofs }: { s: State; onProofs: (key: string) => void }) {
   const paid = Object.entries(s.payouts)
-    .filter(([, p]) => p.paid)
-    .map(([key, p]) => ({ key, ym: key.slice(0, 7), t: Number(key.slice(8)), ...p, share: p.amount ?? 0 }))
+    .map(([key, p]) => ({ key, ym: key.slice(0, 7), t: Number(key.slice(8)), ...p, amount: p.amount ?? 0 }))
     .sort((a, b) => (a.ym < b.ym ? 1 : a.ym > b.ym ? -1 : b.t - a.t));
-  const total = paid.reduce((sum, p) => sum + p.share, 0);
-
+  const total = paid.reduce((sum, p) => sum + p.amount, 0);
   return (
-    <section className="card" aria-label="Riwayat pembayaran">
-      <div className="card__head">
-        <h3 className="card__title">Riwayat payout</h3>
-        <span className="chip">{paid.length ? `${fmtRp(total)} total` : "—"}</span>
-      </div>
-      <ul className="history">
-        {paid.map((p) => (
-          <li key={p.key} className="history__item">
-            <span className="badge badge--paid"><span className="badge__dot"></span>Paid</span>
-            <div className="history__body">
-              <p className="history__title" style={{ margin: 0 }}>Payout {p.t} — {monthLabel(p.ym)}</p>
-              <p className="history__date" style={{ margin: "1px 0 0" }}>Untuk {s.settings.partnerName} · dibayar {fmtDate(p.paidAt)}</p>
-              {p.proofs.length > 0 && (
-                <button type="button" className="link-btn history__proof" onClick={() => onProofs(p.key)}>
-                  Lihat bukti transfer{p.proofs.length > 1 ? ` (${p.proofs.length})` : ""}
-                </button>
-              )}
-            </div>
-            <span className="history__amount">{fmtRp(p.share)}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="empty" hidden={paid.length > 0}>Belum ada riwayat pembayaran.</p>
-    </section>
-  );
-}
-
-function Footer() {
-  const s = useStore();
-  const fileRef = useRef<HTMLInputElement>(null);
-  return (
-    <footer className="footer">
-      <p>
-        <span className="sync" data-state={s.sync.state}><span className="sync__dot"></span><span>{syncText()}</span></span>
-      </p>
-      <p>
-        Data terenkripsi sebelum dikirim ke cloud.{" "}
-        <button className="link-btn" onClick={exportBackup}>Export JSON</button> ·{" "}
-        <button className="link-btn" onClick={() => fileRef.current?.click()}>Import JSON</button> ·{" "}
-        <button className="link-btn link-btn--danger" onClick={resetAll}>Reset data</button>
-      </p>
-      <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => {
-        const f = e.target.files?.[0];
-        e.target.value = ""; // supaya file yang sama bisa dipilih lagi
-        if (f) importBackup(f);
-      }} />
-    </footer>
+    <Section title="Riwayat payout" action={paid.length ? <span className="tnum text-xs font-medium text-muted-foreground">{fmtRp(total)} total</span> : undefined}>
+      {paid.length === 0 ? (
+        <EmptyState icon={<History />} title="Belum ada riwayat pembayaran" />
+      ) : (
+        <ul className="max-h-96 divide-y overflow-y-auto border-t">
+          {paid.map((p) => (
+            <li key={p.key} className="flex items-center gap-3 px-5 py-3">
+              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-success/12 text-success-ink"><CircleCheck className="size-4" /></span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">Payout {p.t} — <span className="capitalize">{monthLabel(p.ym)}</span></p>
+                <p className="truncate text-xs text-muted-foreground">
+                  Untuk {s.settings.partnerName} · {fmtDate(p.paidAt)}
+                  {p.proofs.length > 0 && <> · <button className="font-medium text-primary hover:underline" onClick={() => onProofs(p.key)}>bukti{p.proofs.length > 1 ? ` (${p.proofs.length})` : ""}</button></>}
+                </p>
+              </div>
+              <span className="tnum shrink-0 text-sm font-semibold">{fmtRp(p.amount)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
   );
 }

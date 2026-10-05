@@ -25,15 +25,14 @@ Aplikasi web sederhana untuk mencatat margin kotor, menghitung share partner per
 
 ## Struktur
 
-Next.js (App Router, TypeScript). Semua data diproses di browser; tidak ada server sendiri selain Supabase.
+Next.js (App Router, TypeScript), Tailwind CSS v4 + shadcn/ui. Semua data diproses di browser; tidak ada server sendiri selain Supabase.
 
 - `app/` — halaman: `/` (pemilik), `/partner` (login partner), `/share` (link detail payout dari WhatsApp)
-- `components/` — tampilan React
+- `components/` — tampilan React (`components/ui/` = komponen shadcn/ui)
 - `lib/crypto.ts` — enkripsi (format harus tetap sama supaya data & link lama terbaca)
 - `lib/supabase.ts` — akses REST Supabase
 - `lib/model.ts` — model data & perhitungan (fungsi murni)
 - `lib/store.ts` — state aplikasi pemilik, sinkron, login, semua aksi
-- `legacy/` — versi HTML lama, hanya acuan selama migrasi
 
 ## Menjalankan lokal
 

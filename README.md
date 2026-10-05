@@ -21,7 +21,6 @@ Aplikasi web sederhana untuk mencatat margin kotor, menghitung share partner per
 1. Buat project di https://supabase.com
 2. Jalankan [`supabase/schema.sql`](supabase/schema.sql) di SQL Editor
 3. Isi Project URL dan anon key di `config.js`
-Data tidak sinkron antar perangkat/browser; pakai **Export JSON** / **Import JSON** untuk memindahkan.
 
 ## Menjalankan lokal
 

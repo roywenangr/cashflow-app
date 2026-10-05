@@ -3,7 +3,8 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import {
-  computeMonth, fmtCompact, fmtRp, monthLabel, monthsInRange, shiftMonth, shortMonth, State, today, type MonthSummary,
+  computeMonth, daysInMonth, entryShare, fmtCompact, fmtDate, fmtRp, monthLabel, monthsInRange, shiftMonth, shortMonth, State,
+  today, type MonthSummary,
 } from "@/lib/model";
 import { cn } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -20,7 +21,8 @@ const SERIES: { key: SeriesKey; label: string }[] = [
   { key: "net", label: "Profit bersih" },
 ];
 
-// Batas pilihan bulan: dari bulan data pertama (minimal 11 bulan lalu) s/d bulan data terakhir / bulan ini.
+// Batas pilihan bulan: dari bulan invoice pertama s/d bulan invoice terakhir / bulan ini.
+// Bulan sebelum invoice pertama tidak ditampilkan — hanya membuat garis datar di nol.
 function rangeBounds(s: State) {
   const cur = today().slice(0, 7);
   let first: string | null = null, last = cur;
@@ -29,17 +31,19 @@ function rangeBounds(s: State) {
     if (!first || ym < first) first = ym;
     if (ym > last) last = ym;
   }
-  const min12 = shiftMonth(last, -11);
-  return { first: first || min12, earliest: first && first < min12 ? first : min12, latest: last };
+  const start = first && first < cur ? first : cur;
+  return { first: start, earliest: start, latest: last };
 }
 
 function presetRange(s: State, preset: string): [string, string] {
   const b = rangeBounds(s);
   const year = today().slice(0, 4);
-  if (preset === "6") return [shiftMonth(b.latest, -5), b.latest];
-  if (preset === "12") return [shiftMonth(b.latest, -11), b.latest];
-  if (preset === "year") return [`${year}-01`, `${year}-12` < b.latest ? `${year}-12` : b.latest];
-  return [b.first < b.latest ? b.first : b.latest, b.latest]; // "all"
+  const clamp = (ym: string) => (ym < b.first ? b.first : ym);
+  if (preset === "month") { const cur = today().slice(0, 7); return [cur, cur]; }
+  if (preset === "6") return [clamp(shiftMonth(b.latest, -5)), b.latest];
+  if (preset === "12") return [clamp(shiftMonth(b.latest, -11)), b.latest];
+  if (preset === "year") return [clamp(`${year}-01`), `${year}-12` < b.latest ? `${year}-12` : b.latest];
+  return [b.first, b.latest]; // "all"
 }
 
 // Skala sumbu Y yang "bulat": kelipatan 1 / 2 / 2,5 / 5 × 10^k, sekitar 4 garis.
@@ -76,6 +80,39 @@ function monotonePath(pts: [number, number][]) {
   return d;
 }
 
+// Satu titik grafik: per bulan, atau per hari (kumulatif) kalau rentangnya satu bulan.
+type Point = { id: string; axis: string; title: string; margin: number; share: number; net: number; status: string; ym: string; mark: boolean };
+
+function monthPoints(data: MonthSummary[], from: string, to: string): Point[] {
+  const multiYear = from.slice(0, 4) !== to.slice(0, 4);
+  return data.map((d, i) => ({
+    id: d.ym, ym: d.ym, mark: true,
+    axis: shortMonth(d.ym, false) + (multiYear && (i === 0 || d.ym.endsWith("-01")) ? " " + d.ym.slice(2, 4) : ""),
+    title: monthLabel(d.ym), margin: d.margin, share: d.share, net: d.net,
+    status: d.margin === 0 ? "Tidak ada invoice"
+      : d.paidCount === 2 ? "Lunas" : d.paidCount === 0 ? `Belum dibayar ${fmtRp(d.due)}` : `1/2 lunas · sisa ${fmtRp(d.due)}`,
+  }));
+}
+
+// Kumulatif per tanggal sepanjang satu bulan (invoice bertanggal ke depan ikut terhitung, sama seperti totalnya).
+function dayPoints(s: State, ym: string): Point[] {
+  const last = daysInMonth(ym);
+  const pts: Point[] = [];
+  let margin = 0, share = 0;
+  for (let d = 1; d <= last; d++) {
+    const date = `${ym}-${String(d).padStart(2, "0")}`;
+    const todays = s.entries.filter((e) => e.date === date);
+    const dayAmount = todays.reduce((sum, e) => sum + e.amount, 0);
+    margin += dayAmount;
+    share += todays.reduce((sum, e) => sum + entryShare(e), 0);
+    pts.push({
+      id: date, ym, axis: String(d), title: `${fmtDate(date)} · kumulatif`, margin, share, net: margin - share, mark: todays.length > 0,
+      status: todays.length ? `${todays.length} invoice hari ini · ${fmtRp(dayAmount)}` : "Tidak ada invoice hari ini",
+    });
+  }
+  return pts;
+}
+
 export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) => void }) {
   const s = useStore();
   const [range, setRange] = useState<[string, string] | null>(null);
@@ -92,7 +129,9 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
   const data = yms.map((ym) => computeMonth(s.state, ym));
   const withData = data.filter((d) => d.margin > 0);
   const totals = data.reduce((a, d) => ({ margin: a.margin + d.margin, share: a.share + d.share, due: a.due + d.due }), { margin: 0, share: 0, due: 0 });
-  const activePreset = ["6", "12", "year", "all"].find((p) => { const [pf, pt] = presetRange(s.state, p); return pf === from && pt === to; }) ?? "";
+  const single = from === to;
+  const points = single ? dayPoints(s.state, from) : monthPoints(data, from, to);
+  const activePreset = ["month", "6", "12", "year", "all"].find((p) => { const [pf, pt] = presetRange(s.state, p); return pf === from && pt === to; }) ?? "";
 
   return (
     <Stagger className="space-y-5">
@@ -106,6 +145,7 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
           </div>
         </div>
         <ToggleGroup type="single" variant="outline" value={activePreset} onValueChange={(p) => p && setRange(presetRange(s.state, p))}>
+          <ToggleGroupItem value="month" className="h-9 px-3">Bulan ini</ToggleGroupItem>
           <ToggleGroupItem value="6" className="h-9 px-3">6 bln</ToggleGroupItem>
           <ToggleGroupItem value="12" className="h-9 px-3">12 bln</ToggleGroupItem>
           <ToggleGroupItem value="year" className="h-9 px-3">Tahun ini</ToggleGroupItem>
@@ -121,7 +161,9 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
       </Rise>
 
       <Rise>
-      <Section title={<>Bulanan <span className="font-normal text-muted-foreground">· {shortMonth(from)} – {shortMonth(to)} ({yms.length} bulan)</span></>}
+      <Section title={single
+          ? <>Harian <span className="font-normal text-muted-foreground">· <span className="capitalize">{monthLabel(from)}</span> (kumulatif)</span></>
+          : <>Bulanan <span className="font-normal text-muted-foreground">· {shortMonth(from)} – {shortMonth(to)} ({yms.length} bulan)</span></>}
         action={
           <ToggleGroup type="multiple" variant="outline" size="sm" value={show}
             onValueChange={(v: string[]) => v.length && setShow(v as SeriesKey[])} aria-label="Tampilkan garis">
@@ -134,13 +176,13 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
         }>
         <div className="px-3 pb-4 sm:px-5">
           {withData.length ? (
-            <LineChart data={data} from={from} to={to} show={show} onOpen={onOpenMonth} />
+            <LineChart key={single ? "day" : "month"} points={points} show={show} onOpen={onOpenMonth} />
           ) : (
             <EmptyState icon={<ChartLine />} title={s.state.entries.length ? "Tidak ada data di rentang ini" : "Belum ada data"}>
               {s.state.entries.length ? "Pilih rentang lain." : "Tambahkan invoice dulu."}
             </EmptyState>
           )}
-          <p className="mt-2 text-center text-xs text-muted-foreground sm:hidden">Ketuk grafik untuk detail bulan</p>
+          <p className="mt-2 text-center text-xs text-muted-foreground sm:hidden">Ketuk grafik untuk detail {single ? "tanggal" : "bulan"}</p>
         </div>
       </Section>
       </Rise>
@@ -201,8 +243,8 @@ function Stat({ dot, label, value }: { dot: string; label: string; value: number
   );
 }
 
-function LineChart({ data, from, to, show, onOpen }: {
-  data: MonthSummary[]; from: string; to: string; show: SeriesKey[]; onOpen: (ym: string) => void;
+function LineChart({ points: data, show, onOpen }: {
+  points: Point[]; show: SeriesKey[]; onOpen: (ym: string) => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -254,8 +296,8 @@ function LineChart({ data, from, to, show, onOpen }: {
     xs.forEach((px, i) => { if (Math.abs(px - x) < Math.abs(xs[best] - x)) best = i; });
     return best;
   };
-  const multiYear = from.slice(0, 4) !== to.slice(0, 4);
-  const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(plotW / (multiYear ? 52 : 40)))));
+  const maxLabel = Math.max(...data.map((m) => m.axis.length));
+  const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(plotW / (maxLabel * 7 + 14)))));
   const d = hover !== null ? data[hover] : null;
 
   return (
@@ -281,11 +323,9 @@ function LineChart({ data, from, to, show, onOpen }: {
           );
         })}
         {data.map((m, i) => {
-          if ((n - 1 - i) % every !== 0) return null; // bulan terakhir selalu tampil
-          let label = shortMonth(m.ym, false);
-          if (multiYear && (i === 0 || m.ym.endsWith("-01") || every > 1)) label += " " + m.ym.slice(2, 4);
+          if ((n - 1 - i) % every !== 0) return null; // titik terakhir selalu diberi label
           const anchor = n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle";
-          return <text key={m.ym} x={xs[i]} y={H - 10} textAnchor={anchor} className="fill-muted-foreground text-[11px]">{label}</text>;
+          return <text key={m.id} x={xs[i]} y={H - 10} textAnchor={anchor} className="fill-muted-foreground text-[11px]">{m.axis}</text>;
         })}
         {[...series].reverse().map((x) => {
           const pts = data.map((m, i) => [xs[i], y(m[x.key])] as [number, number]);
@@ -293,12 +333,12 @@ function LineChart({ data, from, to, show, onOpen }: {
           return (
             <g key={x.key}>
               {x.key === "margin" && n > 1 && (
-                <motion.path key={path} d={`${path} L${xs[n - 1]},${y(0)} L${xs[0]},${y(0)} Z`} fill="url(#areaGrad)"
+                <motion.path key={`area-${path}`} d={`${path} L${xs[n - 1]},${y(0)} L${xs[0]},${y(0)} Z`} fill="url(#areaGrad)"
                   initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.8, delay: 0.3 }} />
               )}
-              <motion.path key={path} d={path} fill="none" stroke={`var(--s-${x.key})`} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+              <motion.path key={`line-${path}`} d={path} fill="none" stroke={`var(--s-${x.key})`} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
                 initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 1, ease }} />
-              {pts.map(([px, py], i) => (n > 12 && i !== n - 1) ? null : (
+              {pts.map(([px, py], i) => (n > 12 ? !data[i].mark && i !== n - 1 : false) ? null : (
                 <motion.circle key={`${i}-${px}-${py}`} cx={px} cy={py} r={4} fill={`var(--s-${x.key})`} stroke="var(--card)" strokeWidth={2}
                   initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.3 + i * 0.03, type: "spring", stiffness: 500, damping: 25 }} />
               ))}
@@ -318,17 +358,14 @@ function LineChart({ data, from, to, show, onOpen }: {
       {d && (
         <motion.div ref={tipRef} style={{ left: tipLeft }} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.15 }}
           className="absolute top-1 z-10 min-w-52 rounded-xl border bg-popover p-3 text-[13px] shadow-lg">
-          <p className="mb-2 font-semibold capitalize">{monthLabel(d.ym)}</p>
+          <p className="mb-2 font-semibold capitalize">{d.title}</p>
           {series.map((x) => (
             <p key={x.key} className="flex items-center gap-2 py-0.5 text-muted-foreground">
               <span className={cn("size-2.5 rounded-[3px]", `bg-s-${x.key}`)} />{x.label}
               <b className="tnum ml-auto pl-3 font-semibold text-foreground">{fmtRp(d[x.key])}</b>
             </p>
           ))}
-          <p className="mt-2 border-t pt-2 text-xs text-muted-foreground">
-            {d.margin === 0 ? "Tidak ada invoice"
-              : d.paidCount === 2 ? "Lunas" : d.paidCount === 0 ? `Belum dibayar ${fmtRp(d.due)}` : `1/2 lunas · sisa ${fmtRp(d.due)}`}
-          </p>
+          <p className="mt-2 border-t pt-2 text-xs text-muted-foreground">{d.status}</p>
           <button type="button" onClick={() => onOpen(d.ym)} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
             Buka bulan ini <ArrowUpRight className="size-3.5" />
           </button>

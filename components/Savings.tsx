@@ -97,16 +97,18 @@ function MonthView({ s, ym }: { s: State; ym: string }) {
 function AllView({ s }: { s: State }) {
   const bounds = savingsRange(s);
   const cur = today().slice(0, 7);
+  // Grafik dimulai dari bulan transaksi pertama — bulan sebelumnya tidak punya arti untuk saldo.
   const first = bounds ? bounds[0] : cur;
   const last = bounds && bounds[1] > cur ? bounds[1] : cur;
-  const earliest = first < shiftMonth(last, -11) ? first : shiftMonth(last, -11);
+  const earliest = first;
+  const clampFirst = (ym: string) => (ym < first ? first : ym);
   const presets: Record<string, [string, string]> = {
-    "6": [shiftMonth(last, -5), last],
-    "12": [shiftMonth(last, -11), last],
+    "6": [clampFirst(shiftMonth(last, -5)), last],
+    "12": [clampFirst(shiftMonth(last, -11)), last],
     all: [first, last],
   };
   const [range, setRange] = useState<[string, string] | null>(null);
-  let [from, to] = range ?? presets["12"];
+  let [from, to] = range ?? presets.all;
   if (from < earliest) from = earliest;
   if (to > last) to = last;
   if (from > to) from = to;
@@ -262,7 +264,7 @@ function FlowChart({ months }: { months: SavingsMonth[] }) {
     const H = W < 480 ? 220 : 260;
     const min = Math.min(0, ...months.map((m) => m.end));
     const max = Math.max(1, ...months.flatMap((m) => [m.in, m.out, m.end]));
-    const { top, step } = niceScale(max - min);
+    const { top, step } = niceScale((max - min) * 1.12); // sedikit ruang di atas batang tertinggi
     const bottom = min < 0 ? -Math.ceil(-min / step) * step : 0;
     const ticks: number[] = [];
     for (let v = bottom; v <= top + step / 2; v += step) ticks.push(v);
@@ -272,13 +274,14 @@ function FlowChart({ months }: { months: SavingsMonth[] }) {
     const band = plotW / n;
     const cx = (i: number) => padL + band * (i + 0.5);
     const y = (v: number) => padT + plotH - ((v - bottom) / (top - bottom)) * plotH;
-    const barW = Math.min(14, Math.max(4, band / 2 - 3));
+    const barW = Math.min(22, Math.max(4, band / 2 - 4));
     return { H, ticks, padL, padR, padT, plotW, plotH, n, band, cx, y, barW };
   }, [months, W]);
 
   const { H, ticks, padL, padR, n, band, cx, y, barW } = g;
   const every = Math.max(1, Math.ceil(n / Math.floor(g.plotW / 44)));
   const linePts = months.map((m, i) => `${cx(i)},${y(m.end)}`).join(" ");
+  const areaPath = n > 1 ? `M${cx(0)},${y(0)} L${months.map((m, i) => `${cx(i)},${y(m.end)}`).join(" L")} L${cx(n - 1)},${y(0)} Z` : "";
   const bar = (x: number, v: number, color: string, key: string, delay: number) => {
     const h = Math.max(0, y(0) - y(v));
     return (
@@ -307,6 +310,18 @@ function FlowChart({ months }: { months: SavingsMonth[] }) {
           );
         })}
         {hover !== null && <rect x={padL + band * hover} y={g.padT} width={band} height={g.plotH} className="fill-muted/60" rx={6} />}
+        <defs>
+          <linearGradient id="saveGrad" x1={0} y1={0} x2={0} y2={1}>
+            <stop offset="0%" stopColor="var(--s-margin)" stopOpacity={0.22} />
+            <stop offset="100%" stopColor="var(--s-margin)" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        {/* saldo: area lembut + garis di belakang batang */}
+        {areaPath && <motion.path key={areaPath} d={areaPath} fill="url(#saveGrad)" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.8, delay: 0.2 }} />}
+        {n > 1 && (
+          <motion.polyline key={linePts} points={linePts} fill="none" stroke="var(--s-margin)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round"
+            initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 0.9, ease }} />
+        )}
         {months.map((m, i) => (
           <g key={m.ym}>
             {m.in > 0 && bar(cx(i) - barW - 1, m.in, "var(--s-net)", "in", i * 0.03)}
@@ -316,10 +331,8 @@ function FlowChart({ months }: { months: SavingsMonth[] }) {
             )}
           </g>
         ))}
-        <motion.polyline key={linePts} points={linePts} fill="none" stroke="var(--s-margin)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round"
-          initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 0.9, ease }} />
         {months.map((m, i) => (
-          <circle key={m.ym} cx={cx(i)} cy={y(m.end)} r={hover === i ? 5 : n > 12 ? 0 : 3.5} fill="var(--s-margin)" stroke="var(--card)" strokeWidth={2} />
+          <circle key={m.ym} cx={cx(i)} cy={y(m.end)} r={hover === i ? 5.5 : n > 12 && i !== n - 1 ? 0 : 4} fill="var(--s-margin)" stroke="var(--card)" strokeWidth={2} />
         ))}
       </svg>
       {d && hover !== null && (

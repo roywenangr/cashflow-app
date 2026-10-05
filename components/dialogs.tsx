@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import { CloudDownload, HardDrive, ImageUp, Loader2, MessageCircle } from "lucide-react";
 import {
-  addEntry, addSubsidy, changePassword, closeWa, compressImage, payWithProof, proofUrl, resolveConflict, UserError, waUrl,
+  addEntry, addSavingsUse, addSubsidy, changePassword, closeWa, compressImage, payWithProof, proofUrl, resolveConflict, UserError, waUrl,
 } from "@/lib/store";
 import { cloudConfigured } from "@/lib/config";
-import { fmtDate, fmtRp, monthLabel, terminOf, today, waPhone, type Proof, type Termin } from "@/lib/model";
+import { fmtDate, fmtRp, monthLabel, savingsBalance, terminOf, today, waPhone, type Proof, type Termin } from "@/lib/model";
 import { isNetworkError } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -143,6 +143,60 @@ function SubsidyForm({ onDone }: { onDone: () => void }) {
       <DialogFooter>
         <Button type="button" variant="outline" size="lg" onClick={onDone}>Batal</Button>
         <Button type="submit" size="lg">Simpan</Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+// ---------- Catat penggunaan Money Savings ----------
+
+export function SavingsUseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <SavingsUseForm onDone={() => onOpenChange(false)} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SavingsUseForm({ onDone }: { onDone: () => void }) {
+  const s = useStore();
+  const balance = savingsBalance(s.state);
+  const [date, setDate] = useState(today());
+  const [amount, setAmount] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [err, setErr] = useState("");
+  const n = Math.round(Number(amount));
+  return (
+    <form className="space-y-4" onSubmit={(e) => {
+      e.preventDefault();
+      setErr("");
+      try { addSavingsUse(date, n, purpose.trim()); onDone(); } catch (e2) { setErr(errText(e2)); }
+    }}>
+      <DialogHeader>
+        <DialogTitle>Catat penggunaan</DialogTitle>
+        <DialogDescription>Dana diambil dari Money Savings. Saldo saat ini <b className="tnum font-semibold text-foreground">{fmtRp(balance)}</b>.</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-1.5">
+        <FieldLabel htmlFor="use-amount">Jumlah dipakai</FieldLabel>
+        <MoneyInput id="use-amount" value={amount} onChange={setAmount} autoFocus />
+        {n > 0 && <p className={cn("tnum text-xs", n > balance ? "text-destructive" : "text-muted-foreground")}>Sisa saldo setelahnya: {fmtRp(balance - n)}</p>}
+      </div>
+      <div className="grid grid-cols-[1fr_1.4fr] gap-3">
+        <div className="space-y-1.5">
+          <FieldLabel htmlFor="use-date">Tanggal</FieldLabel>
+          <Input id="use-date" type="date" className="h-10" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <FieldLabel htmlFor="use-purpose">Keperluan</FieldLabel>
+          <Input id="use-purpose" maxLength={80} placeholder="mis. Beli peralatan…" className="h-10" value={purpose} onChange={(e) => setPurpose(e.target.value)} />
+        </div>
+      </div>
+      <FormError>{err}</FormError>
+      <DialogFooter>
+        <Button type="button" variant="outline" size="lg" onClick={onDone}>Batal</Button>
+        <Button type="submit" size="lg">Catat</Button>
       </DialogFooter>
     </form>
   );

@@ -9,7 +9,7 @@ import {
 } from "./crypto";
 import {
   backfillPayoutAmounts, clamp, defaults, fmtDate, fmtRp, monthLabel, newId, normalize, partnerSnapshot,
-  payableOf, shareSnapshot, State, Termin, terminKey, terminOf, terminPeriod, today, waPhone, type Proof,
+  payableOf, savingsBalance, shareSnapshot, State, Termin, terminKey, terminOf, terminPeriod, today, waPhone, type Proof,
 } from "./model";
 import {
   ApiError, appUrl, auth, clearSession, getSession, isNetworkError, remote, restoreSession, setOnSessionChange, setSession,
@@ -618,16 +618,38 @@ export function addSubsidy(termin: Termin, amount: number, purpose: string) {
   if (!(amount > 0) || !purpose) return false;
   S().subsidies.push({ id: newId(), ym: store.viewMonth, termin, amount, purpose });
   commit();
-  toast(`Subsidi silang ${fmtRp(amount)} dipotong dari Payout ${termin} — ${monthLabel(store.viewMonth)}`);
+  toast(`Subsidi silang ${fmtRp(amount)} masuk Money Savings — dipotong dari Payout ${termin}`);
   return true;
 }
 
 export async function deleteSubsidy(id: string) {
   const x = S().subsidies.find((s) => s.id === id);
-  if (x && await ask(`Subsidi silang ${fmtRp(x.amount)} (Payout ${x.termin}) akan dihapus.`, { title: "Hapus subsidi silang?", confirmLabel: "Hapus", danger: true })) {
+  const after = x ? savingsBalance(S()) - x.amount : 0;
+  const warn = after < 0 ? ` Saldo Money Savings akan menjadi minus (${fmtRp(after)}) karena dananya sudah dipakai.` : "";
+  if (x && await ask(`Subsidi silang ${fmtRp(x.amount)} (Payout ${x.termin}) akan dihapus dan dana Money Savings berkurang.${warn}`, { title: "Hapus subsidi silang?", confirmLabel: "Hapus", danger: true })) {
     S().subsidies = S().subsidies.filter((s) => s.id !== id);
     commit();
     toast("Subsidi silang dihapus");
+  }
+}
+
+export function addSavingsUse(date: string, amount: number, purpose: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new UserError("Pilih tanggal.");
+  if (!(amount > 0)) throw new UserError("Masukkan jumlah yang dipakai.");
+  if (!purpose) throw new UserError("Isi keperluannya.");
+  const balance = savingsBalance(S());
+  if (amount > balance) throw new UserError(`Saldo Money Savings tidak cukup — tersisa ${fmtRp(balance)}.`);
+  S().savingsUses.push({ id: newId(), date, amount, purpose });
+  commit();
+  toast(`Penggunaan ${fmtRp(amount)} dicatat — saldo ${fmtRp(balance - amount)}`);
+}
+
+export async function deleteSavingsUse(id: string) {
+  const x = S().savingsUses.find((u) => u.id === id);
+  if (x && await ask(`Catatan penggunaan ${fmtRp(x.amount)} (${x.purpose}) akan dihapus dan saldonya kembali.`, { title: "Hapus penggunaan?", confirmLabel: "Hapus", danger: true })) {
+    S().savingsUses = S().savingsUses.filter((u) => u.id !== id);
+    commit();
+    toast("Catatan penggunaan dihapus");
   }
 }
 

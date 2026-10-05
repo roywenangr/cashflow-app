@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyState, Section, StatusBadge, useStore } from "./common";
+import { ease, Money, motion, Rise, Stagger } from "./motion";
 import { ChartLine } from "lucide-react";
 
 type SeriesKey = "margin" | "share" | "net";
@@ -94,8 +95,8 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
   const activePreset = ["6", "12", "year", "all"].find((p) => { const [pf, pt] = presetRange(s.state, p); return pf === from && pt === to; }) ?? "";
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end gap-3">
+    <Stagger className="space-y-5">
+      <Rise className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">Rentang</p>
           <div className="flex items-center gap-2">
@@ -110,15 +111,16 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
           <ToggleGroupItem value="year" className="h-9 px-3">Tahun ini</ToggleGroupItem>
           <ToggleGroupItem value="all" className="h-9 px-3">Semua</ToggleGroupItem>
         </ToggleGroup>
-      </div>
+      </Rise>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat dot="bg-s-margin" label="Total margin kotor" value={fmtRp(totals.margin)} />
-        <Stat dot="bg-s-share" label="Total share partner" value={fmtRp(totals.share)} />
-        <Stat dot="bg-s-net" label="Total profit bersih" value={fmtRp(totals.margin - totals.share)} />
-        <Stat dot="bg-warning" label="Belum dibayar" value={fmtRp(totals.due)} />
-      </div>
+      <Rise className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat dot="bg-s-margin" label="Total margin kotor" value={totals.margin} />
+        <Stat dot="bg-s-share" label="Total share partner" value={totals.share} />
+        <Stat dot="bg-s-net" label="Total profit bersih" value={totals.margin - totals.share} />
+        <Stat dot="bg-warning" label="Belum dibayar" value={totals.due} />
+      </Rise>
 
+      <Rise>
       <Section title={<>Bulanan <span className="font-normal text-muted-foreground">· {shortMonth(from)} – {shortMonth(to)} ({yms.length} bulan)</span></>}
         action={
           <ToggleGroup type="multiple" variant="outline" size="sm" value={show}
@@ -141,8 +143,10 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
           <p className="mt-2 text-center text-xs text-muted-foreground sm:hidden">Ketuk grafik untuk detail bulan</p>
         </div>
       </Section>
+      </Rise>
 
       {withData.length > 0 && (
+        <Rise>
         <Section title="Per bulan">
           <Table>
             <TableHeader>
@@ -171,8 +175,9 @@ export default function Analytics({ onOpenMonth }: { onOpenMonth: (ym: string) =
             </TableBody>
           </Table>
         </Section>
+        </Rise>
       )}
-    </div>
+    </Stagger>
   );
 }
 
@@ -187,12 +192,12 @@ function MonthSelect({ value, options, onChange, label }: { value: string; optio
   );
 }
 
-function Stat({ dot, label, value }: { dot: string; label: string; value: string }) {
+function Stat({ dot, label, value }: { dot: string; label: string; value: number }) {
   return (
-    <div className="rounded-2xl border bg-card p-4 shadow-xs">
+    <motion.div whileHover={{ y: -2 }} className="rounded-2xl border bg-card p-4 shadow-xs transition-shadow hover:shadow-md">
       <p className="flex items-center gap-2 text-xs text-muted-foreground"><span className={cn("size-2 rounded-full", dot)} />{label}</p>
-      <p className="tnum mt-1.5 truncate text-lg font-semibold tracking-tight">{value}</p>
-    </div>
+      <Money value={value} className="tnum mt-1.5 block truncate text-lg font-semibold tracking-tight" />
+    </motion.div>
   );
 }
 
@@ -287,10 +292,15 @@ function LineChart({ data, from, to, show, onOpen }: {
           const path = monotonePath(pts);
           return (
             <g key={x.key}>
-              {x.key === "margin" && n > 1 && <path d={`${path} L${xs[n - 1]},${y(0)} L${xs[0]},${y(0)} Z`} fill="url(#areaGrad)" />}
-              <path d={path} fill="none" stroke={`var(--s-${x.key})`} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              {x.key === "margin" && n > 1 && (
+                <motion.path key={path} d={`${path} L${xs[n - 1]},${y(0)} L${xs[0]},${y(0)} Z`} fill="url(#areaGrad)"
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.8, delay: 0.3 }} />
+              )}
+              <motion.path key={path} d={path} fill="none" stroke={`var(--s-${x.key})`} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+                initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 1, ease }} />
               {pts.map(([px, py], i) => (n > 12 && i !== n - 1) ? null : (
-                <circle key={i} cx={px} cy={py} r={4} fill={`var(--s-${x.key})`} stroke="var(--card)" strokeWidth={2} />
+                <motion.circle key={`${i}-${px}-${py}`} cx={px} cy={py} r={4} fill={`var(--s-${x.key})`} stroke="var(--card)" strokeWidth={2}
+                  initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.3 + i * 0.03, type: "spring", stiffness: 500, damping: 25 }} />
               ))}
             </g>
           );
@@ -306,7 +316,7 @@ function LineChart({ data, from, to, show, onOpen }: {
         <rect x={padL - 10} y={0} width={plotW + 20} height={H} fill="transparent" className="cursor-crosshair" />
       </svg>
       {d && (
-        <div ref={tipRef} style={{ left: tipLeft }}
+        <motion.div ref={tipRef} style={{ left: tipLeft }} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.15 }}
           className="absolute top-1 z-10 min-w-52 rounded-xl border bg-popover p-3 text-[13px] shadow-lg">
           <p className="mb-2 font-semibold capitalize">{monthLabel(d.ym)}</p>
           {series.map((x) => (
@@ -322,7 +332,7 @@ function LineChart({ data, from, to, show, onOpen }: {
           <button type="button" onClick={() => onOpen(d.ym)} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
             Buka bulan ini <ArrowUpRight className="size-3.5" />
           </button>
-        </div>
+        </motion.div>
       )}
     </div>
   );

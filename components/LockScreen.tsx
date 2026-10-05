@@ -7,6 +7,7 @@ import { MIN_PW, setLockMode, skipMigration, submitLock, UserError } from "@/lib
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Brand, FieldLabel, FormError, Logo, PasswordInput, ThemeButton, useStore } from "./common";
+import { ease, motion, rise } from "./motion";
 
 const COPY = {
   login: { title: "Selamat datang kembali", sub: "Masuk untuk membuka data. Pakai akun yang sama di laptop & HP." },
@@ -59,28 +60,29 @@ export default function LockScreen() {
           <ThemeButton />
         </div>
         <div className="flex flex-1 items-center justify-center py-10">
-          <form onSubmit={onSubmit} noValidate className="w-full max-w-sm space-y-5">
-            <div className="space-y-1.5">
+          <motion.form onSubmit={onSubmit} noValidate className="w-full max-w-sm space-y-5"
+            initial="hidden" animate="show" variants={{ hidden: {}, show: { transition: { staggerChildren: 0.05 } } }}>
+            <motion.div variants={rise} className="space-y-1.5">
               <h1 className="text-2xl font-semibold tracking-tight">{COPY[mode].title}</h1>
               <p className="text-sm text-muted-foreground">{COPY[mode].sub}</p>
-            </div>
+            </motion.div>
 
             {s.lock.info && (
               <p role="status" className="rounded-lg bg-success/10 px-3 py-2 text-[13px] font-medium text-success-ink">{s.lock.info}</p>
             )}
 
             {!(migrate || disabled) && (
-              <div className="space-y-1.5">
+              <motion.div variants={rise} className="space-y-1.5">
                 <FieldLabel htmlFor="email">Email</FieldLabel>
                 <Input id="email" ref={emailRef} type="email" autoComplete="username" inputMode="email" autoCapitalize="off"
                   spellCheck={false} placeholder="nama@email.com" className="h-10" value={email} onChange={(e) => setEmail(e.target.value)} />
-              </div>
+              </motion.div>
             )}
-            <div className="space-y-1.5">
+            <motion.div variants={rise} className="space-y-1.5">
               <FieldLabel htmlFor="pw">{migrate ? "Password lama" : "Password"}</FieldLabel>
               <PasswordInput id="pw" ref={pwRef} autoComplete={signup ? "new-password" : "current-password"} disabled={disabled}
                 value={pw} onChange={(e) => setPw(e.target.value)} />
-            </div>
+            </motion.div>
             {signup && (
               <div className="space-y-1.5">
                 <FieldLabel htmlFor="pw2">Ulangi password</FieldLabel>
@@ -91,7 +93,9 @@ export default function LockScreen() {
               </div>
             )}
 
-            <FormError>{error}</FormError>
+            <motion.div animate={error ? { x: [0, -8, 8, -5, 5, 0] } : {}} transition={{ duration: 0.4 }}>
+              <FormError>{error}</FormError>
+            </motion.div>
 
             <Button type="submit" size="lg" className="h-10 w-full" disabled={disabled || busy}>
               {busy ? <><Loader2 className="animate-spin" /> Memproses…</>
@@ -120,7 +124,7 @@ export default function LockScreen() {
             <Button asChild variant="outline" size="lg" className="h-10 w-full">
               <Link href="/partner"><Users /> Masuk sebagai partner</Link>
             </Button>
-          </form>
+          </motion.form>
         </div>
       </div>
     </div>
@@ -130,8 +134,12 @@ export default function LockScreen() {
 function BrandPanel() {
   return (
     <aside className="bg-hero relative hidden overflow-hidden p-10 text-white lg:flex lg:flex-col lg:justify-between">
-      <div className="pointer-events-none absolute -top-32 -right-24 size-[28rem] rounded-full bg-white/10 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-40 -left-20 size-[26rem] rounded-full bg-black/20 blur-3xl" />
+      <motion.div aria-hidden className="pointer-events-none absolute -top-32 -right-24 size-[28rem] rounded-full bg-white/10 blur-3xl"
+        animate={{ x: [0, -40, 0], y: [0, 30, 0], scale: [1, 1.1, 1] }} transition={{ duration: 16, repeat: Infinity, ease: "easeInOut" }} />
+      <motion.div aria-hidden className="pointer-events-none absolute -bottom-40 -left-20 size-[26rem] rounded-full bg-black/20 blur-3xl"
+        animate={{ x: [0, 50, 0], y: [0, -24, 0] }} transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }} />
+      <motion.div aria-hidden className="pointer-events-none absolute top-1/3 left-1/2 size-56 rounded-full bg-sky-300/15 blur-3xl"
+        animate={{ x: [0, -60, 30, 0], y: [0, 40, -20, 0] }} transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }} />
       <div className="relative flex items-center gap-3">
         <Logo className="bg-white/15 bg-none" />
         <div className="leading-tight">
@@ -139,14 +147,25 @@ function BrandPanel() {
           <p className="text-xs text-white/70">Profit Sharing - Made with &lt;3</p>
         </div>
       </div>
-      <div className="relative max-w-md space-y-6">
-        <h2 className="text-4xl leading-tight font-semibold tracking-tight">Bagi hasil yang rapi, transparan, dan aman.</h2>
+      <motion.div className="relative max-w-md space-y-6" initial="hidden" animate="show"
+        variants={{ hidden: {}, show: { transition: { staggerChildren: 0.12, delayChildren: 0.15 } } }}>
+        <motion.h2 variants={{ hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transition: { duration: 0.8, ease } } }}
+          className="text-4xl leading-tight font-semibold tracking-tight">Bagi hasil yang rapi, transparan, dan aman.</motion.h2>
         <ul className="space-y-4 text-sm text-white/85">
-          <li className="flex gap-3"><ShieldCheck className="mt-0.5 size-5 shrink-0" /> Data dienkripsi di perangkatmu sebelum dikirim — server hanya menyimpan sandi acak.</li>
-          <li className="flex gap-3"><RefreshCcw className="mt-0.5 size-5 shrink-0" /> Sinkron otomatis di laptop & HP, tetap jalan saat offline.</li>
-          <li className="flex gap-3"><LockKeyhole className="mt-0.5 size-5 shrink-0" /> Partner punya portal sendiri — hanya melihat bagiannya.</li>
+          {[
+            [ShieldCheck, "Data dienkripsi di perangkatmu sebelum dikirim — server hanya menyimpan sandi acak."],
+            [RefreshCcw, "Sinkron otomatis di laptop & HP, tetap jalan saat offline."],
+            [LockKeyhole, "Partner punya portal sendiri — hanya melihat bagiannya."],
+          ].map(([I, text], i) => {
+            const Ico = I as typeof ShieldCheck;
+            return (
+              <motion.li key={i} variants={{ hidden: { opacity: 0, x: -16 }, show: { opacity: 1, x: 0, transition: { duration: 0.6, ease } } }} className="flex gap-3">
+                <Ico className="mt-0.5 size-5 shrink-0" /> {text as string}
+              </motion.li>
+            );
+          })}
         </ul>
-      </div>
+      </motion.div>
       <p className="relative text-xs text-white/60">AES-256-GCM · PBKDF2 600.000 iterasi</p>
     </aside>
   );

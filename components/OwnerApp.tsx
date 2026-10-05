@@ -6,16 +6,17 @@ import LockScreen from "./LockScreen";
 import Dashboard from "./Dashboard";
 import { ConflictDialog } from "./dialogs";
 import { AppToaster, useStore } from "./common";
+import { MotionProvider } from "./motion";
 
 export default function OwnerApp() {
   const s = useStore();
   useEffect(() => { start(); }, []);
   if (!s.ready) return null; // semua data ada di browser — tidak ada yang dirender di server
   return (
-    <>
+    <MotionProvider>
       {s.unlocked ? <Dashboard /> : <LockScreen key={`${s.lock.mode}|${s.lock.error}|${s.lock.info}`} />}
       <ConflictDialog />
       <AppToaster />
-    </>
+    </MotionProvider>
   );
 }

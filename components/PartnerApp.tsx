@@ -15,6 +15,7 @@ import { rpc } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Brand, EmptyState, FieldLabel, FormError, Logo, PasswordInput, StatusBadge, useMounted } from "./common";
+import { AnimatePresence, ease, Money, motion, MotionProvider, Rise, Stagger } from "./motion";
 
 const SESSION_KEY = "cashflow.partner"; // { lookup, k } — hilang saat tab ditutup
 type Creds = { lookup: string; k: string };
@@ -49,6 +50,12 @@ export default function PartnerApp() {
   const [refreshing, setRefreshing] = useState(false);
   const [note, setNote] = useState("");
 
+  function logout() {
+    setCreds(null);
+    setView(null);
+    try { sessionStorage.removeItem(SESSION_KEY); } catch { /* abaikan */ }
+  }
+
   // Masih di tab yang sama -> pakai sesi tab ini.
   useEffect(() => {
     let saved: Creds | null = null;
@@ -61,12 +68,6 @@ export default function PartnerApp() {
         else setErr("Tidak bisa terhubung ke server — periksa koneksi internet.");
       });
   }, []);
-
-  function logout() {
-    setCreds(null);
-    setView(null);
-    try { sessionStorage.removeItem(SESSION_KEY); } catch { /* abaikan */ }
-  }
 
   async function login(e: React.FormEvent) {
     e.preventDefault();
@@ -91,13 +92,16 @@ export default function PartnerApp() {
   }
 
   if (!mounted) return null;
+  return <MotionProvider>{renderBody()}</MotionProvider>;
 
+  function renderBody() {
   if (!creds || !view) {
     return (
       <div className="flex min-h-dvh flex-col px-4 py-6 sm:px-8">
         <Brand sub="Portal partner" />
         <div className="flex flex-1 items-center justify-center py-10">
-          <form onSubmit={login} noValidate className="w-full max-w-sm space-y-5">
+          <motion.form onSubmit={login} noValidate className="w-full max-w-sm space-y-5"
+            initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease }}>
             <div className="flex flex-col items-center gap-3 text-center">
               <Logo className="size-12 rounded-2xl text-base" />
               <div className="space-y-1">
@@ -117,7 +121,7 @@ export default function PartnerApp() {
             <Button asChild variant="ghost" size="lg" className="h-10 w-full">
               <Link href="/"><ArrowLeft /> Masuk sebagai pemilik</Link>
             </Button>
-          </form>
+          </motion.form>
         </div>
       </div>
     );
@@ -145,32 +149,32 @@ export default function PartnerApp() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl space-y-6 px-4 pt-5 pb-12 sm:px-6">
-        <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr]">
+      <Stagger className="mx-auto max-w-4xl space-y-6 px-4 pt-5 pb-12 sm:px-6">
+        <Rise className="grid gap-4 sm:grid-cols-[1.4fr_1fr]">
           <div className="bg-hero relative overflow-hidden rounded-2xl p-6 text-white shadow-sm">
             <div className="pointer-events-none absolute -top-20 -right-16 size-64 rounded-full bg-white/10 blur-3xl" />
             <p className="relative flex items-center gap-2 text-sm text-white/75"><Wallet className="size-4" /> Total sudah diterima</p>
-            <p className="tnum relative mt-2 text-4xl font-semibold tracking-tight">{fmtRp(d.received)}</p>
+            <Money value={d.received} className="tnum relative mt-2 block text-4xl font-semibold tracking-tight" />
             <p className="relative mt-1 text-sm text-white/70">{settled ? `${settled} payout lunas` : "Belum ada payout lunas"}</p>
           </div>
           <div className="flex flex-col justify-between rounded-2xl border bg-card p-6 shadow-xs">
             <p className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="size-4" /> Belum dibayar</p>
-            <p className={cn("tnum mt-2 text-3xl font-semibold tracking-tight", d.outstanding > 0 && "text-warning-ink")}>{fmtRp(d.outstanding)}</p>
+            <Money value={d.outstanding} className={cn("tnum mt-2 block text-3xl font-semibold tracking-tight", d.outstanding > 0 && "text-warning-ink")} />
             <p className="mt-1 text-sm text-muted-foreground">{waiting ? `${waiting} payout menunggu` : "Semua lunas"}</p>
           </div>
-        </div>
+        </Rise>
 
         {d.months.length === 0 && (
           <div className="rounded-2xl border bg-card"><EmptyState icon={<Wallet />} title="Belum ada data payout" /></div>
         )}
 
         {d.months.map((m) => (
-          <section key={m.ym} className="space-y-3">
+          <Rise key={m.ym} className="space-y-3">
             <h2 className="px-1 text-sm font-semibold text-muted-foreground capitalize">{m.label}</h2>
             <div className="grid items-start gap-4 md:grid-cols-2">
               {m.payouts.map((p) => <PartnerPayoutCard key={p.t} p={p} lookup={creds.lookup} />)}
             </div>
-          </section>
+          </Rise>
         ))}
 
         <p className="text-center text-xs text-muted-foreground">
@@ -178,9 +182,10 @@ export default function PartnerApp() {
             ? `Data diperbarui ${new Date(view.updatedAt).toLocaleString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`
             : "")}
         </p>
-      </main>
+      </Stagger>
     </div>
   );
+  }
 }
 
 function PartnerPayoutCard({ p, lookup }: { p: PartnerPayout; lookup: string }) {
@@ -191,7 +196,8 @@ function PartnerPayoutCard({ p, lookup }: { p: PartnerPayout; lookup: string }) 
   const value = partial ? p.remaining : p.paid ? p.paidAmount : p.payable;
 
   return (
-    <article className={cn("flex flex-col rounded-2xl border bg-card shadow-xs", p.remaining > 0 && "ring-1 ring-warning/30")}>
+    <motion.article whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 30 }}
+      className={cn("flex flex-col rounded-2xl border bg-card shadow-xs transition-shadow hover:shadow-md", p.remaining > 0 && "ring-1 ring-warning/30")}>
       <div className="flex items-start justify-between gap-3 px-5 pt-5">
         <div>
           <h3 className="text-[15px] font-semibold tracking-tight">Payout {p.t}</h3>
@@ -203,7 +209,7 @@ function PartnerPayoutCard({ p, lookup }: { p: PartnerPayout; lookup: string }) 
       </div>
       <div className="px-5 pt-4">
         <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="tnum mt-0.5 text-3xl font-semibold tracking-tight">{fmtRp(value)}</p>
+        <Money value={value} className="tnum mt-0.5 block text-3xl font-semibold tracking-tight" />
       </div>
       <dl className="mx-5 mt-4 space-y-2 border-t pt-4 text-sm">
         <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Share partner</dt><dd className="tnum font-medium">{fmtRp(p.share)}</dd></div>
@@ -229,15 +235,18 @@ function PartnerPayoutCard({ p, lookup }: { p: PartnerPayout; lookup: string }) 
             <FileText /> {showProofs ? "Tutup bukti transfer" : `Lihat bukti transfer${p.proofs.length > 1 ? ` (${p.proofs.length})` : ""}`}
           </Button>
         )}
-        {showProofs && (
-          <div className="space-y-3">
-            {p.proofs.map((x) => (
-              <ProofImage key={x.id} proof={x} load={() => rpc("get_partner_receipt", { lookup_hex: lookup, receipt_id: x.id })} />
-            ))}
-          </div>
-        )}
+        <AnimatePresence initial={false}>
+          {showProofs && (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.35, ease }} className="space-y-3 overflow-hidden">
+              {p.proofs.map((x) => (
+                <ProofImage key={x.id} proof={x} load={() => rpc("get_partner_receipt", { lookup_hex: lookup, receipt_id: x.id })} />
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-    </article>
+    </motion.article>
   );
 }
 
@@ -269,10 +278,10 @@ export function ProofImage({ proof, load }: { proof: Proof; load: () => Promise<
       ) : !url ? (
         <div className="grid h-48 place-items-center rounded-lg bg-muted text-muted-foreground"><Loader2 className="animate-spin" /></div>
       ) : (
-        <a href={url} target="_blank" rel="noopener">
+        <motion.a href={url} target="_blank" rel="noopener" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.4, ease }} className="block">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={url} alt="Bukti transfer" className="max-h-[70vh] w-full rounded-lg border bg-muted object-contain" />
-        </a>
+        </motion.a>
       )}
       <figcaption className="tnum text-xs text-muted-foreground">
         {[proof.amount !== null ? fmtRp(proof.amount) : null, proof.at ? fmtDate(proof.at) : null].filter(Boolean).join(" · ")}

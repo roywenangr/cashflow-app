@@ -3,13 +3,13 @@
 import { useRef, useState } from "react";
 import {
   CalendarDays, ChartLine, ChevronLeft, ChevronRight, CircleCheck, Download, FileText, HandCoins, History, KeyRound,
-  LayoutDashboard, LogOut, MessageCircle, MoreHorizontal, Plus, Receipt, Settings, Trash2, Undo2, Upload, Wallet,
+  LayoutDashboard, LogOut, MessageCircle, MoreHorizontal, PiggyBank, Plus, Receipt, Settings, Trash2, Undo2, Upload, Wallet,
 } from "lucide-react";
 import {
   deleteEntry, deleteSubsidy, exportBackup, importBackup, logout, resetAll, setViewMonth, syncText, unmarkPaid, waUrl,
 } from "@/lib/store";
 import {
-  dashPeriod, entryShare, fmtDate, fmtPct, fmtRp, monthEntries, monthLabel, pctLabel, shiftMonth, State, Termin,
+  dashPeriod, entryShare, fmtDate, fmtPct, fmtRp, monthEntries, monthLabel, pctLabel, savingsBalance, shiftMonth, State, Termin,
   terminEntries, terminKey, terminOf, terminPeriod, terminTotals, today,
 } from "@/lib/model";
 import { cn } from "@/lib/utils";
@@ -22,8 +22,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Brand, EmptyState, Section, StatusBadge, ThemeButton, useStore } from "./common";
 import Analytics from "./Analytics";
+import Savings from "./Savings";
 import SettingsSheet from "./SettingsSheet";
-import { AddInvoiceDialog, AddSubsidyDialog, PasswordDialog, ProofDialog, ProofViewDialog, WaDialog } from "./dialogs";
+import {
+  AddInvoiceDialog, AddSubsidyDialog, PasswordDialog, ProofDialog, ProofViewDialog, SavingsUseDialog, WaDialog,
+} from "./dialogs";
+import { AnimatePresence, listItem, Money, motion, Rise, Stagger, TabPanel } from "./motion";
 
 export default function Dashboard() {
   const s = useStore();
@@ -32,6 +36,7 @@ export default function Dashboard() {
   const [pwOpen, setPwOpen] = useState(false);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [subsidyOpen, setSubsidyOpen] = useState(false);
+  const [useOpen, setUseOpen] = useState(false);
   const [payTarget, setPayTarget] = useState<null | { ym: string; t: number; msg: string }>(null);
   const [proofKey, setProofKey] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -45,6 +50,7 @@ export default function Dashboard() {
             <TabsList className="mx-auto hidden md:flex">
               <TabsTrigger value="overview"><LayoutDashboard /> Ringkasan</TabsTrigger>
               <TabsTrigger value="analytics"><ChartLine /> Analitik</TabsTrigger>
+              <TabsTrigger value="savings"><PiggyBank /> Savings</TabsTrigger>
             </TabsList>
             <div className="ml-auto flex items-center gap-1 md:ml-0">
               <SyncDot />
@@ -73,6 +79,7 @@ export default function Dashboard() {
             <TabsList className="w-full">
               <TabsTrigger value="overview"><LayoutDashboard /> Ringkasan</TabsTrigger>
               <TabsTrigger value="analytics"><ChartLine /> Analitik</TabsTrigger>
+              <TabsTrigger value="savings"><PiggyBank /> Savings</TabsTrigger>
             </TabsList>
           </div>
         </header>
@@ -81,10 +88,14 @@ export default function Dashboard() {
           <TabsContent value="overview">
             <Overview s={s.state} ym={s.viewMonth}
               onAddInvoice={() => setInvoiceOpen(true)} onAddSubsidy={() => setSubsidyOpen(true)}
-              onPay={(t, msg) => setPayTarget({ ym: s.viewMonth, t, msg })} onProofs={setProofKey} />
+              onPay={(t, msg) => setPayTarget({ ym: s.viewMonth, t, msg })} onProofs={setProofKey}
+              onSavings={() => setTab("savings")} />
           </TabsContent>
           <TabsContent value="analytics">
-            <Analytics onOpenMonth={(ym) => { setViewMonth(ym); setTab("overview"); }} />
+            <TabPanel><Analytics onOpenMonth={(ym) => { setViewMonth(ym); setTab("overview"); }} /></TabPanel>
+          </TabsContent>
+          <TabsContent value="savings">
+            <TabPanel><Savings onUse={() => setUseOpen(true)} /></TabPanel>
           </TabsContent>
         </main>
 
@@ -102,6 +113,7 @@ export default function Dashboard() {
       <PasswordDialog open={pwOpen} onOpenChange={setPwOpen} />
       <AddInvoiceDialog open={invoiceOpen} onOpenChange={setInvoiceOpen} />
       <AddSubsidyDialog open={subsidyOpen} onOpenChange={setSubsidyOpen} />
+      <SavingsUseDialog open={useOpen} onOpenChange={setUseOpen} />
       <ProofDialog target={payTarget} onClose={() => setPayTarget(null)} />
       <ProofViewDialog payoutKey={proofKey} onClose={() => setProofKey(null)} />
       <WaDialog />
@@ -131,14 +143,14 @@ function SyncDot() {
 
 // ---------- Ringkasan ----------
 
-function Overview({ s, ym, onAddInvoice, onAddSubsidy, onPay, onProofs }: {
+function Overview({ s, ym, onAddInvoice, onAddSubsidy, onPay, onProofs, onSavings }: {
   s: State; ym: string; onAddInvoice: () => void; onAddSubsidy: () => void;
-  onPay: (t: Termin, msg: string) => void; onProofs: (key: string) => void;
+  onPay: (t: Termin, msg: string) => void; onProofs: (key: string) => void; onSavings: () => void;
 }) {
   const isThisMonth = ym === today().slice(0, 7);
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+    <Stagger className="space-y-5">
+      <Rise className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="flex items-center justify-between gap-1 rounded-xl border bg-card p-1 shadow-xs sm:justify-start">
           <Button variant="ghost" size="icon-lg" aria-label="Bulan sebelumnya" onClick={() => setViewMonth(shiftMonth(ym, -1))}><ChevronLeft /></Button>
           <h1 className="min-w-36 text-center text-[15px] font-semibold tracking-tight capitalize">{monthLabel(ym)}</h1>
@@ -151,27 +163,27 @@ function Overview({ s, ym, onAddInvoice, onAddSubsidy, onPay, onProofs }: {
           <Button variant="outline" size="lg" className="h-10 sm:h-9" onClick={onAddSubsidy}><HandCoins /> Subsidi silang</Button>
           <Button size="lg" className="h-10 sm:h-9" onClick={onAddInvoice}><Plus /> Tambah invoice</Button>
         </div>
-      </div>
+      </Rise>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <Rise className="grid gap-4 lg:grid-cols-3">
         <Hero s={s} ym={ym} />
         <PaymentStatus s={s} ym={ym} />
-      </div>
+      </Rise>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <Rise className="grid gap-4 md:grid-cols-2">
         {([1, 2] as const).map((t) => (
           <PayoutCard key={t} s={s} ym={ym} t={t} onPay={(msg) => onPay(t, msg)} onProofs={() => onProofs(terminKey(ym, t))} />
         ))}
-      </div>
+      </Rise>
 
-      <div className="grid items-start gap-4 lg:grid-cols-3">
+      <Rise className="grid items-start gap-4 lg:grid-cols-3">
         <Invoices s={s} ym={ym} onAdd={onAddInvoice} className="lg:col-span-2" />
         <div className="space-y-4">
-          <Subsidies s={s} ym={ym} onAdd={onAddSubsidy} />
+          <Subsidies s={s} ym={ym} onAdd={onAddSubsidy} onSavings={onSavings} />
           <PayoutHistory s={s} onProofs={onProofs} />
         </div>
-      </div>
-    </div>
+      </Rise>
+    </Stagger>
   );
 }
 
@@ -186,26 +198,31 @@ function Hero({ s, ym }: { s: State; ym: string }) {
 
   return (
     <div className="bg-hero relative overflow-hidden rounded-2xl p-6 text-white shadow-sm lg:col-span-2">
-      <div className="pointer-events-none absolute -top-24 -right-16 size-72 rounded-full bg-white/10 blur-3xl" />
+      <motion.div aria-hidden className="pointer-events-none absolute -top-24 -right-16 size-72 rounded-full bg-white/10 blur-3xl"
+        animate={{ x: [0, -24, 0], y: [0, 18, 0], scale: [1, 1.08, 1] }} transition={{ duration: 14, repeat: Infinity, ease: "easeInOut" }} />
+      <motion.div aria-hidden className="pointer-events-none absolute -bottom-28 left-1/3 size-64 rounded-full bg-sky-300/10 blur-3xl"
+        animate={{ x: [0, 30, 0], y: [0, -12, 0] }} transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }} />
       <div className="relative">
         <p className="flex items-center gap-2 text-sm text-white/75"><Wallet className="size-4" /> Profit bersih kamu · <span className="capitalize">{monthLabel(ym)}</span></p>
-        <p className="tnum mt-2 text-4xl font-semibold tracking-tight sm:text-5xl">{fmtRp(profit - share)}</p>
+        <Money value={profit - share} className="tnum mt-2 block text-4xl font-semibold tracking-tight sm:text-5xl" />
         <p className="mt-1 text-sm text-white/70">Margin kotor − share partner · {entries.length} invoice</p>
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <HeroStat label="Margin kotor" value={fmtRp(profit)} />
-          <HeroStat label={`Share partner (${pct})`} value={fmtRp(share)} />
-          <HeroStat label="Subsidi silang" value={subsidy ? "−" + fmtRp(subsidy) : "—"} className="col-span-2 sm:col-span-1" />
+          <HeroStat label="Margin kotor" value={profit} />
+          <HeroStat label={`Share partner (${pct})`} value={share} />
+          <HeroStat label="Subsidi silang" value={subsidy} negative className="col-span-2 sm:col-span-1" />
         </div>
       </div>
     </div>
   );
 }
 
-function HeroStat({ label, value, className }: { label: string; value: string; className?: string }) {
+function HeroStat({ label, value, negative, className }: { label: string; value: number; negative?: boolean; className?: string }) {
   return (
-    <div className={cn("rounded-xl bg-white/10 px-3.5 py-3 ring-1 ring-white/10 backdrop-blur", className)}>
+    <div className={cn("rounded-xl bg-white/10 px-3.5 py-3 ring-1 ring-white/10 backdrop-blur transition-colors hover:bg-white/15", className)}>
       <p className="truncate text-xs text-white/70">{label}</p>
-      <p className="tnum mt-0.5 truncate text-[15px] font-semibold">{value}</p>
+      {negative && value === 0
+        ? <p className="mt-0.5 text-[15px] font-semibold">—</p>
+        : <Money value={value} prefix={negative ? "−" : ""} className="tnum mt-0.5 block truncate text-[15px] font-semibold" />}
     </div>
   );
 }
@@ -231,7 +248,7 @@ function PaymentStatus({ s, ym }: { s: State; ym: string }) {
   return (
     <div className="flex flex-col rounded-2xl border bg-card p-5 shadow-xs">
       <p className="text-sm font-medium text-muted-foreground">Pembayaran ke {s.settings.partnerName}</p>
-      <p className="tnum mt-2 text-2xl font-semibold tracking-tight">{fmtRp(paid)}<span className="text-base font-normal text-muted-foreground"> / {fmtRp(payable)}</span></p>
+      <p className="tnum mt-2 text-2xl font-semibold tracking-tight"><Money value={paid} /><span className="text-base font-normal text-muted-foreground"> / {fmtRp(payable)}</span></p>
       <Progress value={pct} className="mt-3 h-2" />
       <p className="mt-2 text-xs text-muted-foreground">
         {payable === 0 ? "Belum ada tagihan bulan ini" : due > 0 ? <>Belum dibayar <b className="tnum font-semibold text-warning-ink">{fmtRp(due)}</b></> : "Semua payout bulan ini lunas"}
@@ -264,7 +281,8 @@ function PayoutCard({ s, ym, t, onPay, onProofs }: {
   const amount = partial ? tt.remaining : tt.paid ? tt.paidAmount : tt.payable;
 
   return (
-    <article className={cn("flex flex-col rounded-2xl border bg-card shadow-xs", tt.remaining > 0 && "ring-1 ring-warning/30")}>
+    <motion.article whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 400, damping: 30 }}
+      className={cn("flex flex-col rounded-2xl border bg-card shadow-xs transition-shadow hover:shadow-md", tt.remaining > 0 && "ring-1 ring-warning/30")}>
       <div className="flex items-start justify-between gap-3 px-5 pt-5">
         <div>
           <h3 className="text-[15px] font-semibold tracking-tight">Payout {t}</h3>
@@ -279,7 +297,7 @@ function PayoutCard({ s, ym, t, onPay, onProofs }: {
       <div className="px-5 pt-4">
         <p className="text-xs text-muted-foreground">{label}</p>
         <p className={cn("tnum mt-0.5 text-3xl font-semibold tracking-tight", empty && !tt.paid && "text-muted-foreground/60")}>
-          {empty && !tt.paid ? "—" : fmtRp(amount)}
+          {empty && !tt.paid ? "—" : <Money value={amount} />}
         </p>
         {tt.payable > 0 && <Progress value={progress} className="mt-3 h-1.5" />}
       </div>
@@ -323,7 +341,7 @@ function PayoutCard({ s, ym, t, onPay, onProofs }: {
           )}
         </div>
       </div>
-    </article>
+    </motion.article>
   );
 }
 
@@ -347,11 +365,13 @@ function Invoices({ s, ym, onAdd, className }: { s: State; ym: string; onAdd: ()
         <EmptyState icon={<Receipt />} title="Belum ada invoice tercatat bulan ini">Tambahkan invoice untuk menghitung share partner otomatis.</EmptyState>
       ) : (
         <>
-          <ul className="divide-y border-t">
+          <ul className="border-t">
+            <AnimatePresence initial={false}>
             {entries.map((e) => {
               const [y, m, d] = e.date.split("-").map(Number);
               return (
-                <li key={e.id} className="flex items-center gap-3 px-5 py-3">
+                <motion.li key={e.id} {...listItem} className="overflow-hidden border-b last:border-b-0">
+                <div className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-muted/40">
                   <div className="grid w-11 shrink-0 place-items-center rounded-lg bg-muted py-1.5 leading-none">
                     <span className="tnum text-base font-semibold">{d}</span>
                     <span className="mt-0.5 text-[10px] text-muted-foreground uppercase">{new Date(y, m - 1, d).toLocaleDateString("id-ID", { month: "short" })}</span>
@@ -365,13 +385,15 @@ function Invoices({ s, ym, onAdd, className }: { s: State; ym: string; onAdd: ()
                   <span className="hidden shrink-0 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground sm:inline">Payout {terminOf(s, e.date)}</span>
                   <Button variant="ghost" size="icon" aria-label="Hapus invoice" className="text-muted-foreground hover:text-destructive"
                     onClick={() => deleteEntry(e.id)}><Trash2 /></Button>
-                </li>
+                </div>
+                </motion.li>
               );
             })}
+            </AnimatePresence>
           </ul>
           <div className="flex justify-between border-t px-5 py-3 text-sm">
             <span className="text-muted-foreground">Total margin kotor</span>
-            <span className="tnum font-semibold">{fmtRp(total)}</span>
+            <Money value={total} className="tnum font-semibold" />
           </div>
         </>
       )}
@@ -379,26 +401,36 @@ function Invoices({ s, ym, onAdd, className }: { s: State; ym: string; onAdd: ()
   );
 }
 
-function Subsidies({ s, ym, onAdd }: { s: State; ym: string; onAdd: () => void }) {
+function Subsidies({ s, ym, onAdd, onSavings }: { s: State; ym: string; onAdd: () => void; onSavings: () => void }) {
   const list = s.subsidies.filter((x) => x.ym === ym).sort((a, b) => a.termin - b.termin);
   const total = list.reduce((sum, x) => sum + x.amount, 0);
   return (
     <Section title="Subsidi silang" action={<Button variant="ghost" size="sm" onClick={onAdd}><Plus /> Tambah</Button>}>
+      <button onClick={onSavings}
+        className="group mx-5 mb-3 flex w-[calc(100%-2.5rem)] items-center gap-3 rounded-xl bg-[oklch(0.52_0.12_175)]/10 px-3 py-2.5 text-left transition-colors hover:bg-[oklch(0.52_0.12_175)]/15">
+        <PiggyBank className="size-4 shrink-0 text-[oklch(0.55_0.12_175)]" />
+        <span className="min-w-0 flex-1 text-xs text-muted-foreground">Masuk ke <b className="font-medium text-foreground">Money Savings</b> · saldo <Money value={savingsBalance(s)} className="tnum font-semibold text-foreground" /></span>
+        <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+      </button>
       {list.length === 0 ? (
         <EmptyState icon={<HandCoins />} title="Tidak ada subsidi silang">Potongan dari share partner untuk keperluan bersama.</EmptyState>
       ) : (
         <>
-          <ul className="divide-y border-t">
+          <ul className="border-t">
+            <AnimatePresence initial={false}>
             {list.map((x) => (
-              <li key={x.id} className="flex items-center gap-3 px-5 py-3">
+              <motion.li key={x.id} {...listItem} className="overflow-hidden border-b last:border-b-0">
+              <div className="flex items-center gap-3 px-5 py-3">
                 <div className="min-w-0 flex-1">
                   <p className="tnum text-sm font-semibold">−{fmtRp(x.amount)}</p>
                   <p className="truncate text-xs text-muted-foreground">{x.purpose} · Payout {x.termin}</p>
                 </div>
                 <Button variant="ghost" size="icon" aria-label="Hapus subsidi silang" className="text-muted-foreground hover:text-destructive"
                   onClick={() => deleteSubsidy(x.id)}><Trash2 /></Button>
-              </li>
+              </div>
+              </motion.li>
             ))}
+            </AnimatePresence>
           </ul>
           <div className="flex justify-between border-t px-5 py-3 text-sm">
             <span className="text-muted-foreground">Total bulan ini</span>
@@ -420,9 +452,11 @@ function PayoutHistory({ s, onProofs }: { s: State; onProofs: (key: string) => v
       {paid.length === 0 ? (
         <EmptyState icon={<History />} title="Belum ada riwayat pembayaran" />
       ) : (
-        <ul className="max-h-96 divide-y overflow-y-auto border-t">
+        <ul className="max-h-96 overflow-y-auto border-t">
+          <AnimatePresence initial={false}>
           {paid.map((p) => (
-            <li key={p.key} className="flex items-center gap-3 px-5 py-3">
+            <motion.li key={p.key} {...listItem} className="overflow-hidden border-b last:border-b-0">
+            <div className="flex items-center gap-3 px-5 py-3">
               <span className="grid size-8 shrink-0 place-items-center rounded-full bg-success/12 text-success-ink"><CircleCheck className="size-4" /></span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">Payout {p.t} — <span className="capitalize">{monthLabel(p.ym)}</span></p>
@@ -432,8 +466,10 @@ function PayoutHistory({ s, onProofs }: { s: State; onProofs: (key: string) => v
                 </p>
               </div>
               <span className="tnum shrink-0 text-sm font-semibold">{fmtRp(p.amount)}</span>
-            </li>
+            </div>
+            </motion.li>
           ))}
+          </AnimatePresence>
         </ul>
       )}
     </Section>

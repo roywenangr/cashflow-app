@@ -13,6 +13,7 @@ import { rpc } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Brand } from "./common";
 import { ProofImage } from "./PartnerApp";
+import { Money, motion, MotionProvider, Rise, Stagger } from "./motion";
 
 export default function ShareView() {
   const [d, setD] = useState<Share | null>(null);
@@ -48,6 +49,7 @@ export default function ShareView() {
   }, []);
 
   return (
+    <MotionProvider>
     <div className="mx-auto min-h-dvh max-w-xl px-4 py-6 sm:py-10">
       <Brand sub="Detail payout" />
 
@@ -70,6 +72,7 @@ export default function ShareView() {
 
       {d && <Receipt d={d} shareId={shareId} />}
     </div>
+    </MotionProvider>
   );
 }
 
@@ -77,12 +80,13 @@ function Receipt({ d, shareId }: { d: Share; shareId: string }) {
   const payments = d.payments.filter((p) => p.at && p.amount !== null);
   const proofs = d.payments.filter((p) => p.proof);
   return (
-    <div className="mt-6 space-y-4">
-      <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
+    <Stagger className="mt-6 space-y-4">
+      <Rise className="overflow-hidden rounded-2xl border bg-card shadow-sm">
         <div className="flex flex-col items-center gap-2 px-6 pt-7 pb-6 text-center">
-          <span className="grid size-12 place-items-center rounded-full bg-success/12 text-success-ink"><CircleCheck className="size-6" /></span>
+          <motion.span initial={{ scale: 0, rotate: -30 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: "spring", stiffness: 300, damping: 15, delay: 0.15 }}
+            className="grid size-12 place-items-center rounded-full bg-success/12 text-success-ink"><CircleCheck className="size-6" /></motion.span>
           <p className="text-sm text-muted-foreground">Payout {d.t} · {d.monthLabel} · untuk {d.partnerName}</p>
-          <p className="tnum text-4xl font-semibold tracking-tight">{fmtRp(d.paidAmount)}</p>
+          <Money value={d.paidAmount} className="tnum text-4xl font-semibold tracking-tight" />
           <p className="text-sm text-muted-foreground">
             {payments.length > 1
               ? "Dibayar bertahap: " + payments.map((p) => `${fmtRp(p.amount!)} (${fmtDate(p.at!)})`).join(" + ")
@@ -97,7 +101,7 @@ function Receipt({ d, shareId }: { d: Share; shareId: string }) {
             <Line label="Share setelah subsidi" value={fmtRp(d.payable)} strong />
           </>}
         </dl>
-      </div>
+      </Rise>
 
       {proofs.length > 0 && (
         <Card title="Bukti transfer">
@@ -141,19 +145,21 @@ function Receipt({ d, shareId }: { d: Share; shareId: string }) {
         </Card>
       )}
 
-      <p className="flex items-center justify-center gap-1.5 pt-2 text-xs text-muted-foreground">
-        <ShieldCheck className="size-3.5" /> Terenkripsi end-to-end — hanya pemegang link ini yang bisa membukanya.
-      </p>
-    </div>
+      <Rise>
+        <p className="flex items-center justify-center gap-1.5 pt-2 text-xs text-muted-foreground">
+          <ShieldCheck className="size-3.5" /> Terenkripsi end-to-end — hanya pemegang link ini yang bisa membukanya.
+        </p>
+      </Rise>
+    </Stagger>
   );
 }
 
 function Card({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border bg-card shadow-xs">
+    <Rise className="rounded-2xl border bg-card shadow-xs">
       <h2 className="flex items-center px-5 pt-4 pb-3 text-[15px] font-semibold tracking-tight">{title}</h2>
       {children}
-    </section>
+    </Rise>
   );
 }
 

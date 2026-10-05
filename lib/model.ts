@@ -13,6 +13,8 @@ export type Payout = {
   share?: { id: string; k: string };
 };
 export type Subsidy = { id: string; ym: string; termin: Termin; amount: number; purpose: string };
+// Penggunaan dana Money Savings (dana masuk = subsidi silang).
+export type SavingsUse = { id: string; date: string; amount: number; purpose: string };
 export type PartnerAccess = { password: string; lookup: string; k: string };
 export type Settings = {
   partnerName: string;
@@ -26,6 +28,7 @@ export type State = {
   entries: Entry[];
   payouts: Record<string, Payout>; // "YYYY-MM-1" | "YYYY-MM-2"
   subsidies: Subsidy[];
+  savingsUses: SavingsUse[];
   theme: Theme;
 };
 
@@ -38,6 +41,7 @@ export const defaults = (): State => ({
   entries: [],
   payouts: {},
   subsidies: [],
+  savingsUses: [],
   theme: prefersLight() ? "light" : "dark",
 });
 
@@ -102,6 +106,15 @@ export function normalize(data: any): State {
       purpose: typeof x.purpose === "string" ? x.purpose.slice(0, 80) : "",
     }));
 
+  const savingsUses: SavingsUse[] = (Array.isArray(data.savingsUses) ? data.savingsUses : [])
+    .filter((x: any) => x && /^\d{4}-\d{2}-\d{2}$/.test(x.date) && Number(x.amount) > 0)
+    .map((x: any) => ({
+      id: x.id ? String(x.id) : newId(),
+      date: x.date,
+      amount: Math.round(Number(x.amount)),
+      purpose: typeof x.purpose === "string" ? x.purpose.slice(0, 80) : "",
+    }));
+
   const pa = s.partnerAccess;
   return {
     settings: {
@@ -116,6 +129,7 @@ export function normalize(data: any): State {
     entries,
     payouts,
     subsidies,
+    savingsUses,
     theme: data.theme === "light" ? "light" : data.theme === "dark" ? "dark" : base.theme,
   };
 }
@@ -358,4 +372,42 @@ export function randomPassword(len = 14) {
   const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // tanpa karakter mirip (0/O, 1/l/I)
   const rnd = crypto.getRandomValues(new Uint32Array(len));
   return Array.from(rnd, (n) => chars[n % chars.length]).join("");
+}
+
+// ---------- Money Savings ----------
+// Dana masuk = setiap subsidi silang (dipotong dari share partner). Dana keluar = penggunaan yang dicatat.
+
+export type SavingsTx =
+  | { kind: "in"; id: string; ym: string; sortKey: string; amount: number; purpose: string; termin: Termin }
+  | { kind: "out"; id: string; ym: string; sortKey: string; amount: number; purpose: string; date: string };
+
+// Semua transaksi, terbaru di atas. Dana masuk diurutkan di akhir bulannya (tanggal payout bisa berbeda-beda).
+export function savingsLedger(s: State): SavingsTx[] {
+  const txs: SavingsTx[] = [
+    ...s.subsidies.map((x) => ({ kind: "in" as const, id: x.id, ym: x.ym, sortKey: `${x.ym}-${x.termin === 1 ? "15" : "31"}`, amount: x.amount, purpose: x.purpose, termin: x.termin })),
+    ...s.savingsUses.map((x) => ({ kind: "out" as const, id: x.id, ym: x.date.slice(0, 7), sortKey: x.date, amount: x.amount, purpose: x.purpose, date: x.date })),
+  ];
+  return txs.sort((a, b) => (a.sortKey < b.sortKey ? 1 : a.sortKey > b.sortKey ? -1 : a.kind === "out" ? -1 : 1));
+}
+
+// Saldo s/d akhir bulan ym (atau semua kalau ym kosong).
+export function savingsBalance(s: State, ym?: string) {
+  const inn = s.subsidies.filter((x) => !ym || x.ym <= ym).reduce((sum, x) => sum + x.amount, 0);
+  const out = s.savingsUses.filter((x) => !ym || x.date.slice(0, 7) <= ym).reduce((sum, x) => sum + x.amount, 0);
+  return inn - out;
+}
+
+export type SavingsMonth = { ym: string; in: number; out: number; start: number; end: number };
+
+export function savingsMonth(s: State, ym: string): SavingsMonth {
+  const inn = s.subsidies.filter((x) => x.ym === ym).reduce((sum, x) => sum + x.amount, 0);
+  const out = s.savingsUses.filter((x) => x.date.startsWith(ym + "-")).reduce((sum, x) => sum + x.amount, 0);
+  const end = savingsBalance(s, ym);
+  return { ym, in: inn, out, start: end - inn + out, end };
+}
+
+// Bulan pertama & terakhir yang punya transaksi tabungan.
+export function savingsRange(s: State): [string, string] | null {
+  const yms = [...s.subsidies.map((x) => x.ym), ...s.savingsUses.map((x) => x.date.slice(0, 7))].sort();
+  return yms.length ? [yms[0], yms[yms.length - 1]] : null;
 }

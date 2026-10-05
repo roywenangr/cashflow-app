@@ -14,18 +14,38 @@ Aplikasi web sederhana untuk mencatat margin kotor, menghitung share partner per
 - Dari password + email diturunkan dua nilai (PBKDF2-SHA256, 600.000 iterasi): satu untuk login Supabase, satu lagi kunci enkripsi data.
   Password asli tidak pernah dikirim; Supabase hanya menyimpan ciphertext.
 - Password **tidak bisa dipulihkan** — tanpa password, data tidak bisa dibuka siapa pun. Rutin **Export JSON** sebagai cadangan (file export tidak terenkripsi).
-- `config.js` berisi Supabase URL + anon key; keduanya memang publik dan aksesnya dibatasi Row Level Security.
+- `lib/config.ts` berisi Supabase URL + anon key; keduanya memang publik dan aksesnya dibatasi Row Level Security.
+  Bisa ditimpa lewat env `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 
 ## Setup Supabase (sekali)
 
 1. Buat project di https://supabase.com
 2. Jalankan [`supabase/schema.sql`](supabase/schema.sql) di SQL Editor
-3. Isi Project URL dan anon key di `config.js`
+3. Isi Project URL dan anon key di `lib/config.ts` (atau env var di Vercel)
+
+## Struktur
+
+Next.js (App Router, TypeScript). Semua data diproses di browser; tidak ada server sendiri selain Supabase.
+
+- `app/` — halaman: `/` (pemilik), `/partner` (login partner), `/share` (link detail payout dari WhatsApp)
+- `components/` — tampilan React
+- `lib/crypto.ts` — enkripsi (format harus tetap sama supaya data & link lama terbaca)
+- `lib/supabase.ts` — akses REST Supabase
+- `lib/model.ts` — model data & perhitungan (fungsi murni)
+- `lib/store.ts` — state aplikasi pemilik, sinkron, login, semua aksi
+- `legacy/` — versi HTML lama, hanya acuan selama migrasi
 
 ## Menjalankan lokal
 
 ```sh
-python3 -m http.server 8000
+npm install
+npm run dev
 ```
 
-lalu buka http://localhost:8000
+lalu buka http://localhost:3000
+
+## Deploy
+
+Import repo ini di https://vercel.com/new (framework terdeteksi otomatis sebagai Next.js).
+Tambahkan alamat Vercel-nya di Supabase → Authentication → URL Configuration (Site URL / Redirect URLs)
+supaya link konfirmasi email kembali ke aplikasi.

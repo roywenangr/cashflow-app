@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Dices, KeyRound, Link2, Loader2, ShieldCheck, ShieldOff, Unlink } from "lucide-react";
-import { connectBot, disablePartner, disconnectBot, saveSettings, setPartnerPassword, UserError } from "@/lib/store";
+import { ArrowLeftRight, Dices, KeyRound, Link2, Loader2, ShieldCheck, ShieldOff, Unlink } from "lucide-react";
+import { connectBot, disablePartner, disconnectBot, saveSettings, setPartnerPassword, switchToPersonal, UserError } from "@/lib/store";
 import { DEFAULT_BOT_URL } from "@/lib/botsync";
 import { randomPassword } from "@/lib/model";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,7 @@ function SettingsForm({ onDone, onChangePw }: { onDone: () => void; onChangePw: 
   const [botErr, setBotErr] = useState("");
   const [botBusy, setBotBusy] = useState(false);
   const waiting = s.state.botQueue.length;
+  const [switching, setSwitching] = useState(false);
 
   return (
     <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); saveSettings(name, phone, pct, cutoff); onDone(); }}>
@@ -60,6 +61,14 @@ function SettingsForm({ onDone, onChangePw }: { onDone: () => void; onChangePw: 
       </SheetHeader>
 
       <div className="flex-1 overflow-y-auto">
+        <Group title="Cashflow Pribadi" desc={st.botSync
+          ? "Pengeluaran, dompet & rekap pribadimu. Langsung masuk, tanpa password lagi."
+          : "Pengeluaran, dompet & rekap pribadimu. Sambungkan Bot Telegram di bawah supaya bisa masuk tanpa password."}>
+          <Button type="button" size="lg" className="w-full" disabled={switching} onClick={() => { setSwitching(true); switchToPersonal(); }}>
+            {switching ? <Loader2 className="animate-spin" /> : <ArrowLeftRight />} Beralih ke Cashflow Pribadi
+          </Button>
+        </Group>
+
         <Group title="Partner">
           <div className="space-y-1.5">
             <FieldLabel htmlFor="set-name">Nama partner</FieldLabel>

@@ -8,12 +8,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  ArrowDownLeft, ArrowLeft, ArrowRight, ArrowUpRight, CircleCheck, Clock, FileText, Loader2, LogOut, PiggyBank, RefreshCw, Wallet,
+  ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, CircleCheck, Clock, FileText, Loader2, LogOut, PiggyBank, RefreshCw, Wallet,
 } from "lucide-react";
 import { cloudConfigured } from "@/lib/config";
 import { decryptWithRawKey, derivePartner } from "@/lib/crypto";
 import { dashPeriod, fmtDate, fmtRp, monthLabel, type PartnerPayout, type PartnerView, type Proof } from "@/lib/model";
 import { rpc } from "@/lib/supabase";
+import { DEFAULT_BOT_URL } from "@/lib/botsync";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Brand, EmptyState, FieldLabel, FormError, Logo, PasswordInput, StatusBadge, useMounted } from "./common";
@@ -146,6 +147,9 @@ export default function PartnerApp() {
                 if (e instanceof WrongPassword) logout(); else setNote("Gagal memuat ulang — periksa koneksi internet.");
               } finally { setRefreshing(false); }
             }}><RefreshCw className={cn(refreshing && "animate-spin")} /></Button>
+            <Button asChild variant="ghost" size="icon-lg" aria-label="Beralih ke Cashflow Pribadi" title="Beralih ke Cashflow Pribadi">
+              <a href={DEFAULT_BOT_URL}><ArrowLeftRight /></a>
+            </Button>
             <Button variant="ghost" size="icon-lg" aria-label="Keluar" title="Keluar" onClick={logout}><LogOut /></Button>
           </div>
         </div>

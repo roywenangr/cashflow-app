@@ -2,7 +2,7 @@
 // Ini port langsung dari app.js lama. React membaca lewat useStore() (lib/useStore.ts);
 // setiap perubahan memanggil commit() = simpan + kirim data partner + beri tahu React.
 
-import { BotRejected, fetchBotWallets, sendBotJob, type BotWallets } from "./botsync";
+import { BotRejected, DEFAULT_BOT_URL, fetchBotTicket, fetchBotWallets, sendBotJob, type BotWallets } from "./botsync";
 import { cloudConfigured } from "./config";
 import {
   b64url, clearLegacyLocal, decryptBlob, decryptLegacyLocal, decryptReceipt, deriveCredentials, derivePartner,
@@ -868,6 +868,26 @@ export function flushBotQueue() {
 export function syncBot() {
   if (!store.unlocked || !S().settings.botSync) return;
   if (S().botQueue.length) flushBotQueue(); else refreshBotWallets();
+}
+
+// Pindah ke dashboard keuangan pribadi (app bot). Kalau bot tersambung, langsung masuk tanpa password;
+// kalau tidak (atau gagal), buka halamannya saja — login dengan password dashboard seperti biasa.
+export async function switchToPersonal() {
+  const cfg = S().settings.botSync;
+  if (!cfg) { location.href = DEFAULT_BOT_URL; return; }
+  try {
+    const { ticket } = await fetchBotTicket(cfg);
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = cfg.url + "/api/sync/enter";
+    const input = document.createElement("input");
+    input.type = "hidden"; input.name = "ticket"; input.value = ticket;
+    form.append(input);
+    document.body.append(form);
+    form.submit();
+  } catch {
+    location.href = cfg.url;
+  }
 }
 
 // Sambungkan ke bot: dicoba dulu, baru disimpan kalau token & alamatnya benar.

@@ -30,6 +30,9 @@ async function call(cfg: BotSync, path: string, init: RequestInit = {}) {
 
 export const fetchBotWallets = (cfg: BotSync): Promise<BotWallets> => call(cfg, "/api/sync/wallets");
 
+// Tiket masuk 1 menit ke dashboard bot — supaya token tidak ikut terbawa saat berpindah halaman.
+export const fetchBotTicket = (cfg: BotSync): Promise<{ ticket: string }> => call(cfg, "/api/sync/login", { method: "POST" });
+
 export function sendBotJob(cfg: BotSync, job: BotJob): Promise<{ status: string }> {
   const { op, ...body } = job;
   return call(cfg, "/api/sync/payouts", { method: op === "pay" ? "POST" : "DELETE", body: JSON.stringify(body) });

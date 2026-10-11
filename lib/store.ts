@@ -2,6 +2,7 @@
 // Ini port langsung dari app.js lama. React membaca lewat useStore() (lib/useStore.ts);
 // setiap perubahan memanggil commit() = simpan + kirim data partner + beri tahu React.
 
+import { BotRejected, fetchBotWallets, sendBotJob, type BotWallets } from "./botsync";
 import { cloudConfigured } from "./config";
 import {
   b64url, clearLegacyLocal, decryptBlob, decryptLegacyLocal, decryptReceipt, deriveCredentials, derivePartner,
@@ -9,7 +10,7 @@ import {
 } from "./crypto";
 import {
   backfillPayoutAmounts, clamp, defaults, fmtDate, fmtRp, monthLabel, newId, normalize, partnerSnapshot,
-  payableOf, savingsBalance, shareSnapshot, State, Termin, terminKey, terminOf, terminPeriod, today, waPhone, type Proof,
+  payableOf, savingsBalance, shareSnapshot, State, Termin, terminKey, terminOf, terminPeriod, today, waPhone, type BotSync, type Proof,
 } from "./model";
 import {
   ApiError, appUrl, auth, clearSession, getSession, isNetworkError, remote, restoreSession, setOnSessionChange, setSession,
@@ -46,6 +47,8 @@ export const store = {
   wa: null as null | { key: string; note: string },
   toast: null as null | { msg: string; id: number },
   partnerSynced: false,             // data partner terakhir sudah terkirim
+  // Dompet & saldo dari bot Telegram (kalau tersambung di Pengaturan).
+  bot: { wallets: null as BotWallets | null, loading: false, error: "" },
   accountEmail: "",
 };
 
@@ -286,6 +289,7 @@ function enterApp(data: unknown, { dirty = false } = {}) {
   persistSession();
   setSync(getSession() ? "syncing" : "offline");
   scheduleSync(dirty ? 800 : 100);
+  syncBot();
 }
 
 function loadCacheFor(email: string, userId?: string) {
@@ -516,8 +520,8 @@ export async function start() {
   store.ready = true;
 
   // Tarik perubahan dari perangkat lain saat aplikasi kembali dibuka / aktif.
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleSync(200); });
-  window.addEventListener("online", () => scheduleSync(200));
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { scheduleSync(200); syncBot(); } });
+  window.addEventListener("online", () => { scheduleSync(200); syncBot(); });
   window.addEventListener("offline", () => setSync("offline"));
   setInterval(() => { if (!document.hidden) runSync(); }, 60_000);
 
@@ -734,30 +738,44 @@ export async function compressImage(file: File) {
 
 const proofUrls = new Map<string, string>(); // id -> object URL (cache selama sesi)
 
-function markPaid(ym: string, t: number, proof: { id: string; k: string }) {
+// Dompet bot yang dipilih di dialog bayar: asal (milik sendiri) dan tujuan (milik partner, boleh kosong).
+export type BotPick = { from: { id: number; name: string }; to: { id: number; name: string } | null };
+
+const payoutLabel = (ym: string, t: number) => {
+  const month = monthLabel(ym);
+  return `Payout ${t} ${month[0].toUpperCase()}${month.slice(1)}`;
+};
+
+function markPaid(ym: string, t: number, proof: { id: string; k: string }, pick?: BotPick | null) {
   const key = terminKey(ym, t);
   const prev = S().payouts[key];
   const amount = payableOf(S(), ym, t);
   const proofs = prev && prev.proofs ? prev.proofs : [];
+  const paidNow = amount - (prev ? prev.amount ?? 0 : 0); // selisih, untuk "bayar sisa"
+  const toBot = pick && S().settings.botSync && paidNow > 0 ? pick : null;
   // Simpan nominal yang benar-benar dibayar agar riwayat tidak ikut berubah.
   S().payouts[key] = {
     paid: true, paidAt: today(), amount,
-    proofs: [...proofs, { ...proof, at: today(), amount: amount - (prev ? prev.amount ?? 0 : 0) }],
+    proofs: [...proofs, { ...proof, at: today(), amount: paidNow, ...(toBot ? { bot: { from: toBot.from.name, to: toBot.to?.name ?? null } } : {}) }],
     ...(prev?.share ? { share: prev.share } : {}),
   };
+  if (toBot) {
+    S().botQueue.push({ op: "pay", id: proof.id, amount: paidNow, label: payoutLabel(ym, t), fromWalletId: toBot.from.id, toWalletId: toBot.to?.id ?? null });
+  }
   commit();
   toast(`Payout ${t} ditandai sudah dibayar — ${monthLabel(ym)}`);
+  if (toBot) flushBotQueue();
 }
 
-// Upload bukti -> tandai dibayar -> buat link partner -> tawarkan kirim WhatsApp.
-export async function payWithProof(ym: string, t: number, blob: Blob) {
+// Upload bukti -> tandai dibayar (+ potong saldo dompet di bot) -> buat link partner -> tawarkan kirim WhatsApp.
+export async function payWithProof(ym: string, t: number, blob: Blob, pick?: BotPick | null) {
   if (!getSession()) throw new UserError("Butuh koneksi internet untuk upload bukti transfer.");
   try {
     const id = newId();
     const { k, data } = await encryptWithRandomKey(await blob.arrayBuffer(), blob.type);
     await remote.putReceipt(id, data);
     proofUrls.set(id, URL.createObjectURL(blob));
-    markPaid(ym, t, { id, k });
+    markPaid(ym, t, { id, k }, pick);
   } catch (e) {
     throw new UserError(isNetworkError(e)
       ? "Upload gagal — periksa koneksi internet lalu coba lagi."
@@ -773,7 +791,8 @@ export async function payWithProof(ym: string, t: number, blob: Blob) {
 }
 
 export async function unmarkPaid(ym: string, t: number) {
-  if (!(await ask(`Catatan pembayaran Payout ${t} ${monthLabel(ym)} beserta bukti transfernya akan dihapus dari riwayat.`, { title: "Batalkan tanda bayar?", confirmLabel: "Batalkan pembayaran", danger: true }))) return;
+  const inBot = (S().payouts[terminKey(ym, t)]?.proofs || []).some((x) => x.bot);
+  if (!(await ask(`Catatan pembayaran Payout ${t} ${monthLabel(ym)} beserta bukti transfernya akan dihapus dari riwayat.${inBot ? " Saldo dompet di bot Telegram ikut dikembalikan." : ""}`, { title: "Batalkan tanda bayar?", confirmLabel: "Batalkan pembayaran", danger: true }))) return;
   const key = terminKey(ym, t);
   const prev = S().payouts[key];
   delete S().payouts[key];
@@ -782,8 +801,108 @@ export async function unmarkPaid(ym: string, t: number) {
     remote.deleteReceipts(prev.proofs.map((x) => x.id)).catch(() => {});
   }
   if (prev && prev.share && getSession()) remote.deleteShares([prev.share.id]).catch(() => {});
+  // Pembayaran yang memotong saldo di bot: kembalikan saldonya (kedua sisi).
+  const sentToBot = (prev?.proofs || []).filter((x) => x.bot).map((x) => x.id);
+  if (sentToBot.length) {
+    // Kabar bayar yang belum sempat terkirim cukup dibuang; sisanya dibatalkan di bot.
+    const unsent = new Set(S().botQueue.flatMap((j) => (j.op === "pay" && sentToBot.includes(j.id) ? [j.id] : [])));
+    S().botQueue = S().botQueue.filter((j) => !(j.op === "pay" && unsent.has(j.id)));
+    const ids = sentToBot.filter((id) => !unsent.has(id));
+    if (ids.length) S().botQueue.push({ op: "cancel", ids, label: payoutLabel(ym, t) });
+  }
   commit();
   toast("Tanda dibayar dibatalkan");
+  if (sentToBot.length) flushBotQueue();
+}
+
+// ---------- Bot Telegram: dompet, saldo & kabar payout ----------
+
+export async function refreshBotWallets() {
+  const cfg = S().settings.botSync;
+  if (!cfg) { store.bot = { wallets: null, loading: false, error: "" }; emit(); return; }
+  store.bot = { ...store.bot, loading: true };
+  emit();
+  try {
+    store.bot = { wallets: await fetchBotWallets(cfg), loading: false, error: "" };
+  } catch (e) {
+    store.bot = {
+      wallets: store.bot.wallets, loading: false,
+      error: e instanceof BotRejected ? (e.status === 401 ? "Token bot ditolak — periksa di Pengaturan." : e.message) : "Bot tidak bisa dihubungi.",
+    };
+  }
+  emit();
+}
+
+let flushing: Promise<void> | null = null;
+// Kirim kabar yang masih antre, satu per satu sesuai urutan. Aman diulang: bot mengenali ID yang sama.
+export function flushBotQueue() {
+  flushing ??= (async () => {
+    let sent = false;
+    try {
+      for (;;) {
+        const cfg = S().settings.botSync;
+        const job = S().botQueue[0];
+        if (!cfg || !job) break;
+        const sending = JSON.stringify(job); // state bisa diganti sinkron cloud selagi menunggu
+        try {
+          await sendBotJob(cfg, job);
+          toast(job.op === "pay" ? "Saldo dompet di bot sudah dipotong" : "Saldo dompet di bot sudah dikembalikan");
+        } catch (e) {
+          if (!(e instanceof BotRejected)) { toast("Bot belum terkabari — dicoba lagi otomatis"); break; }
+          if (e.status === 401) { toast("Token bot ditolak — periksa di Pengaturan"); break; }
+          toast(`Bot menolak: ${e.message}`); // mis. dompetnya sudah dihapus — tidak ada gunanya diulang
+        }
+        S().botQueue = S().botQueue.filter((j) => JSON.stringify(j) !== sending);
+        sent = true;
+        commit();
+      }
+    } finally {
+      flushing = null;
+    }
+    if (sent) refreshBotWallets();
+  })();
+  return flushing;
+}
+
+// Kirim kabar yang masih antre; kalau tidak ada, cukup muat ulang dompet & saldo.
+export function syncBot() {
+  if (!store.unlocked || !S().settings.botSync) return;
+  if (S().botQueue.length) flushBotQueue(); else refreshBotWallets();
+}
+
+// Sambungkan ke bot: dicoba dulu, baru disimpan kalau token & alamatnya benar.
+export async function connectBot(urlIn: string, tokenIn: string) {
+  const url = urlIn.trim().replace(/\/+$/, "");
+  const token = tokenIn.trim();
+  if (!/^https:\/\/[\w.-]+$/.test(url)) throw new UserError("Alamat bot harus berupa https://… tanpa garis miring di belakang.");
+  if (!token) throw new UserError("Isi token sinkronnya dulu.");
+  const cfg: BotSync = { url, token };
+  let wallets: BotWallets;
+  try {
+    wallets = await fetchBotWallets(cfg);
+  } catch (e) {
+    throw new UserError(e instanceof BotRejected
+      ? (e.status === 401 ? "Token ditolak bot — salin ulang dari .env.local." : e.message)
+      : "Bot tidak bisa dihubungi — periksa alamat & koneksi internet.");
+  }
+  S().settings.botSync = cfg;
+  store.bot = { wallets, loading: false, error: "" };
+  commit();
+  toast(`Tersambung ke bot — ${wallets.wallets.length} dompet terdeteksi`);
+  flushBotQueue();
+}
+
+export async function disconnectBot() {
+  const waiting = S().botQueue.length;
+  if (!(await ask(waiting
+    ? `Masih ada ${waiting} kabar payout yang belum terkirim ke bot — itu ikut dibuang. Saldo di bot tidak lagi dipotong otomatis.`
+    : "Saldo dompet di bot tidak lagi dipotong otomatis saat payout ditandai dibayar.", { title: "Putuskan sambungan bot?", confirmLabel: "Putuskan", danger: true }))) return false;
+  S().settings.botSync = null;
+  S().botQueue = [];
+  store.bot = { wallets: null, loading: false, error: "" };
+  commit();
+  toast("Sambungan bot diputus");
+  return true;
 }
 
 export async function proofUrl(p: Proof) {

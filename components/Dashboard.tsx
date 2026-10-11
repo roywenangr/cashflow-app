@@ -3,10 +3,11 @@
 import { useRef, useState } from "react";
 import {
   CalendarDays, ChartLine, ChevronLeft, ChevronRight, CircleCheck, Download, FileText, HandCoins, History, KeyRound,
-  LayoutDashboard, LogOut, MessageCircle, MoreHorizontal, PiggyBank, Plus, Receipt, Settings, Trash2, Undo2, Upload, Wallet,
+  LayoutDashboard, LogOut, MessageCircle, MoreHorizontal, PiggyBank, Plus, Receipt, RefreshCw, Settings, Trash2, Undo2, Upload, Wallet,
+  WalletCards,
 } from "lucide-react";
 import {
-  deleteEntry, deleteSubsidy, exportBackup, importBackup, logout, resetAll, setViewMonth, syncText, unmarkPaid, waUrl,
+  deleteEntry, deleteSubsidy, exportBackup, importBackup, logout, resetAll, setViewMonth, syncBot, syncText, unmarkPaid, waUrl,
 } from "@/lib/store";
 import {
   dashPeriod, entryShare, fmtDate, fmtPct, fmtRp, monthEntries, monthLabel, pctLabel, savingsBalance, shiftMonth, State, Termin,
@@ -179,6 +180,7 @@ function Overview({ s, ym, onAddInvoice, onAddSubsidy, onPay, onProofs, onSaving
       <Rise className="grid items-start gap-4 lg:grid-cols-3">
         <Invoices s={s} ym={ym} onAdd={onAddInvoice} className="lg:col-span-2" />
         <div className="space-y-4">
+          {s.settings.botSync && <BotWalletsCard />}
           <Subsidies s={s} ym={ym} onAdd={onAddSubsidy} onSavings={onSavings} />
           <PayoutHistory s={s} onProofs={onProofs} />
         </div>
@@ -397,6 +399,46 @@ function Invoices({ s, ym, onAdd, className }: { s: State; ym: string; onAdd: ()
           </div>
         </>
       )}
+    </Section>
+  );
+}
+
+// Dompet & saldo milikku, dibaca langsung dari bot Telegram.
+function BotWalletsCard() {
+  const { bot, state } = useStore();
+  const wallets = bot.wallets?.wallets ?? [];
+  const waiting = state.botQueue.length;
+  return (
+    <Section title="Dompet" action={
+      <Button variant="ghost" size="sm" disabled={bot.loading} onClick={() => syncBot()}>
+        <RefreshCw className={cn(bot.loading && "animate-spin")} /> Muat ulang
+      </Button>}>
+      {bot.error && <p className="px-5 pb-3 text-xs text-warning-ink">{bot.error}{wallets.length > 0 && " Menampilkan saldo terakhir."}</p>}
+      {wallets.length === 0 ? (
+        !bot.error && (
+          <EmptyState icon={<WalletCards />} title={bot.loading ? "Memuat dompet…" : "Belum ada dompet"}>
+            {!bot.loading && "Tambah lewat bot Telegram: /dompet tambah BCA 5jt"}
+          </EmptyState>
+        )
+      ) : (
+        <>
+          <ul className="border-t">
+            {wallets.map((w) => (
+              <li key={w.id} className="flex items-center justify-between gap-3 border-b px-5 py-2.5 text-sm last:border-b-0">
+                <span className="flex min-w-0 items-center gap-2"><WalletCards className="size-4 shrink-0 text-muted-foreground" /><span className="truncate">{w.name}</span></span>
+                <Money value={w.balance} className={cn("tnum font-semibold", w.balance < 0 && "text-destructive")} />
+              </li>
+            ))}
+          </ul>
+          <div className="flex justify-between border-t px-5 py-3 text-sm">
+            <span className="text-muted-foreground">Total saldo</span>
+            <Money value={wallets.reduce((sum, w) => sum + w.balance, 0)} className="tnum font-semibold" />
+          </div>
+        </>
+      )}
+      <p className="border-t px-5 py-2.5 text-xs text-muted-foreground">
+        {waiting > 0 ? `${waiting} kabar payout belum terkirim ke bot — dicoba lagi otomatis.` : "Dari bot Telegram · payout yang ditandai dibayar memotong saldo di sini."}
+      </p>
     </Section>
   );
 }

@@ -4,7 +4,8 @@ export type Theme = "light" | "dark";
 export type Termin = 1 | 2;
 
 export type Entry = { id: string; date: string; amount: number; note: string; sharePct: number };
-export type Proof = { id: string; k: string; at: string | null; amount: number | null };
+// bot = dompet (di bot Telegram) yang dipakai untuk pembayaran ini; ada berarti saldo bot ikut dipotong.
+export type Proof = { id: string; k: string; at: string | null; amount: number | null; bot?: { from: string; to: string | null } };
 export type Payout = {
   paid: true;
   paidAt: string;
@@ -16,10 +17,17 @@ export type Subsidy = { id: string; ym: string; termin: Termin; amount: number; 
 // Penggunaan dana Money Savings (dana masuk = subsidi silang).
 export type SavingsUse = { id: string; date: string; amount: number; purpose: string };
 export type PartnerAccess = { password: string; lookup: string; k: string };
+// Sambungan ke bot Telegram pencatat keuangan: alamat + token — hanya ada di vault terenkripsi.
+export type BotSync = { url: string; token: string };
+// Kabar untuk bot yang belum terkirim (mis. sedang offline) — dicoba lagi sampai berhasil.
+export type BotJob =
+  | { op: "pay"; id: string; amount: number; label: string; fromWalletId: number; toWalletId: number | null }
+  | { op: "cancel"; ids: string[]; label: string };
 export type Settings = {
   partnerName: string;
   partnerPhone: string;
   partnerAccess?: PartnerAccess | null;
+  botSync?: BotSync | null;
   sharePct: number;
   cutoff: number;
 };
@@ -29,6 +37,7 @@ export type State = {
   payouts: Record<string, Payout>; // "YYYY-MM-1" | "YYYY-MM-2"
   subsidies: Subsidy[];
   savingsUses: SavingsUse[];
+  botQueue: BotJob[];
   theme: Theme;
 };
 
@@ -42,6 +51,7 @@ export const defaults = (): State => ({
   payouts: {},
   subsidies: [],
   savingsUses: [],
+  botQueue: [],
   theme: prefersLight() ? "light" : "dark",
 });
 
@@ -90,6 +100,8 @@ export function normalize(data: any): State {
             k: x.k,
             at: /^\d{4}-\d{2}-\d{2}$/.test(x.at) ? x.at : null,
             amount: Number.isFinite(Number(x.amount)) ? Math.round(Number(x.amount)) : null,
+            ...(x.bot && typeof x.bot.from === "string"
+              ? { bot: { from: x.bot.from.slice(0, 40), to: typeof x.bot.to === "string" ? x.bot.to.slice(0, 40) : null } } : {}),
           })),
         ...(p.share && typeof p.share.id === "string" && typeof p.share.k === "string" ? { share: { id: p.share.id, k: p.share.k } } : {}),
       };
@@ -115,7 +127,21 @@ export function normalize(data: any): State {
       purpose: typeof x.purpose === "string" ? x.purpose.slice(0, 80) : "",
     }));
 
+  const walletId = (v: any) => Number.isInteger(v) && v > 0;
+  const jobId = (v: any) => typeof v === "string" && /^[\w-]{8,64}$/.test(v);
+  const botQueue: BotJob[] = (Array.isArray(data.botQueue) ? data.botQueue : []).flatMap((j: any): BotJob[] => {
+    const label = j && typeof j.label === "string" ? j.label.slice(0, 80) : "";
+    if (j && j.op === "pay" && jobId(j.id) && Number.isInteger(j.amount) && j.amount > 0 && walletId(j.fromWalletId)) {
+      return [{ op: "pay", id: j.id, amount: j.amount, label, fromWalletId: j.fromWalletId, toWalletId: walletId(j.toWalletId) ? j.toWalletId : null }];
+    }
+    if (j && j.op === "cancel" && Array.isArray(j.ids) && j.ids.length > 0 && j.ids.every(jobId)) {
+      return [{ op: "cancel", ids: j.ids.slice(0, 20), label }];
+    }
+    return [];
+  });
+
   const pa = s.partnerAccess;
+  const bs = s.botSync;
   return {
     settings: {
       partnerName: typeof s.partnerName === "string" && s.partnerName.trim() ? s.partnerName.trim().slice(0, 40) : base.settings.partnerName,
@@ -123,6 +149,8 @@ export function normalize(data: any): State {
       // Akses partner: password + turunan (lookup & kunci) — hanya ada di vault terenkripsi.
       partnerAccess: pa && typeof pa.password === "string" && /^[0-9a-f]{64}$/.test(pa.lookup) && typeof pa.k === "string"
         ? { password: pa.password, lookup: pa.lookup, k: pa.k } : null,
+      botSync: bs && typeof bs.url === "string" && /^https:\/\/[\w.-]+$/.test(bs.url) && typeof bs.token === "string" && bs.token
+        ? { url: bs.url, token: bs.token.slice(0, 200) } : null,
       sharePct: defaultPct, // default untuk entri baru
       cutoff: Number.isFinite(cutoff) && s.cutoff !== "" && s.cutoff !== null ? clamp(Math.round(cutoff), 8, 23) : base.settings.cutoff,
     },
@@ -130,6 +158,7 @@ export function normalize(data: any): State {
     payouts,
     subsidies,
     savingsUses,
+    botQueue,
     theme: data.theme === "light" ? "light" : data.theme === "dark" ? "dark" : base.theme,
   };
 }

@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { CloudDownload, HardDrive, ImageUp, Loader2, MessageCircle } from "lucide-react";
 import {
-  addEntry, addSavingsUse, addSubsidy, changePassword, closeWa, compressImage, payWithProof, proofUrl, resolveConflict, UserError, waUrl,
+  addEntry, addSavingsUse, addSubsidy, changePassword, closeWa, compressImage, payWithProof, proofUrl, refreshBotWallets, resolveConflict,
+  UserError, waUrl, type BotPick,
 } from "@/lib/store";
 import { cloudConfigured } from "@/lib/config";
-import { fmtDate, fmtRp, monthLabel, savingsBalance, terminOf, today, waPhone, type Proof, type Termin } from "@/lib/model";
+import { fmtDate, fmtRp, monthLabel, savingsBalance, terminOf, terminTotals, today, waPhone, type Proof, type Termin } from "@/lib/model";
 import { isNetworkError } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { FieldLabel, FormError, PasswordInput, useStore } from "./common";
 
@@ -257,6 +259,14 @@ function PasswordForm({ onDone }: { onDone: () => void }) {
 
 type PayTarget = { ym: string; t: number; msg: string };
 
+// Pilihan dompet terakhir diingat di perangkat ini (bukan data penting — hanya supaya tidak memilih ulang).
+const PICK_FROM = "cashflow.bot.from";
+const PICK_TO = "cashflow.bot.to";
+const SKIP = "skip"; // jangan potong saldo di bot
+const ASK = "ask";   // partner memilih sendiri dompet tujuannya
+const recall = (key: string) => { try { return localStorage.getItem(key) || ""; } catch { return ""; } };
+const remember = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* abaikan */ } };
+
 export function ProofDialog({ target, onClose }: { target: null | PayTarget; onClose: () => void }) {
   return (
     <Dialog open={!!target} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -275,6 +285,20 @@ function ProofForm({ target, onClose }: { target: PayTarget; onClose: () => void
   const [drag, setDrag] = useState(false);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
+  // Dompet dari bot Telegram: asal transfer (milikku) dan dompet partner yang menerima.
+  const s = useStore();
+  const linked = !!s.state.settings.botSync;
+  const bot = s.bot.wallets;
+  useEffect(() => { if (linked) refreshBotWallets(); }, [linked]);
+  const [fromId, setFromId] = useState(() => recall(PICK_FROM));
+  const [toId, setToId] = useState(() => recall(PICK_TO));
+  const due = terminTotals(s.state, target.ym, target.t).remaining;
+  const from = bot?.wallets.find((w) => String(w.id) === fromId) ?? null;
+  // Belum pernah memilih: dompet pertama partner. Dompet yang diingat tapi sudah dihapus: partner yang pilih.
+  const toChoice = toId || String(bot?.partner?.wallets[0]?.id ?? ASK);
+  const to = bot?.partner?.wallets.find((w) => String(w.id) === toChoice) ?? null;
+  const botPick: BotPick | null = from ? { from: { id: from.id, name: from.name }, to: to ? { id: to.id, name: to.name } : null } : null;
+
   async function pick(file?: File) {
     setBlob(null); setPreview(""); setErr("");
     if (!file) return;
@@ -292,8 +316,13 @@ function ProofForm({ target, onClose }: { target: PayTarget; onClose: () => void
     <form className="space-y-4" noValidate onSubmit={async (e) => {
       e.preventDefault();
       if (!blob) { setErr("Pilih screenshot bukti transfer dulu."); return; }
+      if (bot && bot.wallets.length > 0 && !from && fromId !== SKIP) { setErr("Pilih dulu payout ini ditransfer dari dompet mana."); return; }
       setBusy(true); setErr("");
-      try { await payWithProof(target.ym, target.t, blob); onClose(); } catch (e2) { setErr(errText(e2)); } finally { setBusy(false); }
+      try {
+        await payWithProof(target.ym, target.t, blob, botPick);
+        remember(PICK_FROM, fromId); remember(PICK_TO, to ? toChoice : ASK);
+        onClose();
+      } catch (e2) { setErr(errText(e2)); } finally { setBusy(false); }
     }}>
       <DialogHeader>
         <DialogTitle>Lampirkan bukti transfer</DialogTitle>
@@ -318,6 +347,48 @@ function ProofForm({ target, onClose }: { target: PayTarget; onClose: () => void
         <input type="file" accept="image/*" className="sr-only" aria-label="Screenshot bukti transfer" onChange={(e) => pick(e.target.files?.[0])} />
       </label>
       {preview && <p className="text-center text-xs text-muted-foreground">Ketuk gambar untuk mengganti</p>}
+      {linked && (
+        <div className="space-y-3 rounded-xl border bg-muted/30 p-3">
+          {bot && bot.wallets.length > 0 ? (
+            <>
+              <div className="space-y-1.5">
+                <FieldLabel htmlFor="pay-from">Transfer dari dompet</FieldLabel>
+                <Select value={from || fromId === SKIP ? fromId : ""} onValueChange={(v) => { setFromId(v); setErr(""); }}>
+                  <SelectTrigger id="pay-from" className="h-10 w-full"><SelectValue placeholder="Pilih dompet" /></SelectTrigger>
+                  <SelectContent>
+                    {bot.wallets.map((w) => <SelectItem key={w.id} value={String(w.id)}>{w.name} · {fmtRp(w.balance)}</SelectItem>)}
+                    <SelectItem value={SKIP}>Jangan potong saldo di bot</SelectItem>
+                  </SelectContent>
+                </Select>
+                {from && from.balance < due && (
+                  <p className="text-xs text-warning-ink">Saldo {from.name} ({fmtRp(from.balance)}) kurang dari {fmtRp(due)} — tetap bisa, saldonya jadi minus.</p>
+                )}
+              </div>
+              {from && bot.partner && (
+                <div className="space-y-1.5">
+                  <FieldLabel htmlFor="pay-to">Masuk ke dompet {bot.partner.name}</FieldLabel>
+                  <Select value={to ? toChoice : ASK} onValueChange={setToId}>
+                    <SelectTrigger id="pay-to" className="h-10 w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {bot.partner.wallets.map((w) => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                      <SelectItem value={ASK}>Biar {bot.partner.name} yang pilih di Telegram</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {from ? `Saldo ${from.name} di bot langsung dipotong ${fmtRp(due)}, dan kalian berdua dikabari lewat Telegram.` : fromId === SKIP ? "Payout ini tidak dicatat di bot." : "Pilih dompet yang kamu pakai untuk transfer payout ini."}
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {s.bot.loading ? "Memuat dompet dari bot…"
+                : s.bot.error ? `${s.bot.error} Payout tetap bisa ditandai dibayar, tapi saldo di bot tidak dipotong.`
+                : "Belum ada dompet di bot. Tambah lewat Telegram: /dompet tambah BCA 5jt — payout ini tidak memotong saldo."}
+            </p>
+          )}
+        </div>
+      )}
       <FormError>{err}</FormError>
       <DialogFooter>
         <Button type="button" variant="outline" size="lg" onClick={onClose}>Batal</Button>

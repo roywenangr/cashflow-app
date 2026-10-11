@@ -2,11 +2,12 @@
 
 Aplikasi web untuk mencatat margin kotor, menghitung share partner per payout, dan melacak pembayaran.
 
-**Live:** https://cashflowshit.vercel.app · **Versi terbaru:** [v1.0.0](https://github.com/roywenangr/cashflow-app/releases/tag/v1.0.0)
+**Live:** https://cashflowshit.vercel.app · **Versi terbaru:** [v1.1.0](https://github.com/roywenangr/cashflow-app/releases/tag/v1.1.0)
 
 - **Payout 1**: tanggal 1 s/d tanggal batas (default 15) · **Payout 2**: setelahnya s/d akhir bulan
 - Tandai payout sudah dibayar — nominal yang dibayar disimpan, jadi riwayat tidak berubah
 - Grafik cashflow per bulan dengan pilihan rentang (6 bln, 12 bln, tahun ini, semua, atau custom)
+- Tersambung ke bot Telegram pencatat keuangan (opsional): dompet & saldo tampil di dashboard, dan payout yang ditandai dibayar langsung memotong saldo dompet yang dipilih
 - Tema gelap/terang, export & import backup JSON
 - Login email + password, sinkron antar perangkat lewat Supabase — data dienkripsi di browser (AES-256-GCM, kunci dari PBKDF2) sebelum dikirim
 - Tetap bisa dipakai offline; perubahan dikirim saat online, konflik antar perangkat ditanyakan

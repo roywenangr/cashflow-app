@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Dices, KeyRound, Loader2, ShieldCheck, ShieldOff } from "lucide-react";
-import { disablePartner, saveSettings, setPartnerPassword, UserError } from "@/lib/store";
+import { Dices, KeyRound, Link2, Loader2, ShieldCheck, ShieldOff, Unlink } from "lucide-react";
+import { connectBot, disablePartner, disconnectBot, saveSettings, setPartnerPassword, UserError } from "@/lib/store";
+import { DEFAULT_BOT_URL } from "@/lib/botsync";
 import { randomPassword } from "@/lib/model";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { FieldLabel, FormError, StatusBadge, useStore } from "./common";
+import { FieldLabel, FormError, PasswordInput, StatusBadge, useStore } from "./common";
 
 export default function SettingsSheet({ open, onOpenChange, onChangePw }: {
   open: boolean; onOpenChange: (o: boolean) => void; onChangePw: () => void;
@@ -45,6 +46,11 @@ function SettingsForm({ onDone, onChangePw }: { onDone: () => void; onChangePw: 
   const [partnerErr, setPartnerErr] = useState("");
   const [partnerBusy, setPartnerBusy] = useState(false);
   const acc = st.partnerAccess;
+  const [botUrl, setBotUrl] = useState(st.botSync ? st.botSync.url : DEFAULT_BOT_URL);
+  const [botToken, setBotToken] = useState(st.botSync ? st.botSync.token : "");
+  const [botErr, setBotErr] = useState("");
+  const [botBusy, setBotBusy] = useState(false);
+  const waiting = s.state.botQueue.length;
 
   return (
     <form className="flex h-full flex-col" onSubmit={(e) => { e.preventDefault(); saveSettings(name, phone, pct, cutoff); onDone(); }}>
@@ -111,6 +117,39 @@ function SettingsForm({ onDone, onChangePw }: { onDone: () => void; onChangePw: 
             )}
           </div>
           <FormError>{partnerErr}</FormError>
+        </Group>
+
+        <Group title="Bot Telegram" desc="Dompet & saldo dibaca dari bot pencatat keuangan. Saat payout ditandai dibayar, saldo dompet yang kamu pilih langsung dipotong di bot dan kalian berdua dikabari lewat Telegram.">
+          <div className="flex items-center gap-2">
+            {!st.botSync ? <StatusBadge tone="neutral">Belum tersambung</StatusBadge>
+              : s.bot.error ? <StatusBadge tone="due">{s.bot.error}</StatusBadge>
+              : <StatusBadge tone="paid">Tersambung{s.bot.wallets ? ` · ${s.bot.wallets.wallets.length} dompet` : ""}</StatusBadge>}
+            {waiting > 0 && <StatusBadge tone="partial">{waiting} kabar menunggu terkirim</StatusBadge>}
+          </div>
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="set-bot-url">Alamat bot</FieldLabel>
+            <Input id="set-bot-url" type="url" maxLength={120} autoComplete="off" spellCheck={false} className="h-10" value={botUrl} onChange={(e) => setBotUrl(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="set-bot-token">Token sinkron</FieldLabel>
+            <PasswordInput id="set-bot-token" maxLength={200} autoComplete="off" spellCheck={false} placeholder="SYNC_TOKEN_YOR dari .env.local bot"
+              className="font-mono" value={botToken} onChange={(e) => setBotToken(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Disimpan di dalam data terenkripsi akun ini — tidak terlihat oleh partner.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" size="lg" disabled={botBusy} onClick={async () => {
+              setBotErr(""); setBotBusy(true);
+              try { await connectBot(botUrl, botToken); } catch (e) { setBotErr(e instanceof UserError ? e.message : String(e)); } finally { setBotBusy(false); }
+            }}>
+              {botBusy ? <Loader2 className="animate-spin" /> : <Link2 />} {st.botSync ? "Sambungkan ulang" : "Sambungkan"}
+            </Button>
+            {st.botSync && (
+              <Button type="button" variant="destructive" size="lg" onClick={async () => { setBotErr(""); if (await disconnectBot()) setBotToken(""); }}>
+                <Unlink /> Putuskan
+              </Button>
+            )}
+          </div>
+          <FormError>{botErr}</FormError>
         </Group>
 
         <Group title="Akun">
